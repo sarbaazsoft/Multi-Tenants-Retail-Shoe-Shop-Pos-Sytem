@@ -36,7 +36,7 @@ import tenantSaasRoutes from './src/server/routes/tenantSaasRoutes.ts';
 const rootDir = path.resolve('.');
 
 export const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Increase body size limit for JSON and URL-encoded payloads (e.g., base64 images & CSV imports)
 app.use(express.json({ limit: '50mb', strict: false }));
