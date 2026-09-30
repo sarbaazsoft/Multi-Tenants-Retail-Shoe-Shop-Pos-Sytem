@@ -44,7 +44,7 @@ export function generateToken(user: {
   status: 'PENDING' | 'APPROVED' | string;
 }): string {
   const tenantId = Number(user.tenantId) > 0 ? Number(user.tenantId) : 1;
-  const slug = (user.slug || 'tj-shoes').toLowerCase().trim();
+  const slug = (user.slug || '').toLowerCase().trim();
   const role = (user.role || 'CASHIER').toUpperCase();
 
   return jwt.sign(
@@ -135,7 +135,7 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
         : Number.isInteger(rowTid) && rowTid > 0
         ? rowTid
         : 1;
-    let resolvedSlug = String(decoded.slug || 'tj-shoes').toLowerCase();
+    let resolvedSlug = String(decoded.slug || '').toLowerCase();
     const resolvedRole = String(row.role || decoded.role || 'CASHIER').toUpperCase() as 'SUPERADMIN' | 'ADMIN' | 'CASHIER';
 
     // Real-time Tenant Suspension & Subscription Expiry Enforcement at Middleware Level (except for global SUPERADMIN)

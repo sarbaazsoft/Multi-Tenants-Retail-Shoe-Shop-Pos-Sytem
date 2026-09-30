@@ -18,7 +18,7 @@ import { tenantRoutingMiddleware } from './src/server/middleware/tenantMiddlewar
 import installRoutes from './src/server/routes/installRoutes.ts';
 import authRoutes from './src/server/routes/authRoutes.ts';
 import productRoutes from './src/server/routes/productRoutes.ts';
-import brandCategoryRoutes, { brandsRouter, categoriesRouter } from './src/server/routes/brandCategoryRoutes.ts';
+import brandCategoryRoutes from './src/server/routes/brandCategoryRoutes.ts';
 import posRoutes from './src/server/routes/posRoutes.ts';
 import returnRoutes from './src/server/routes/returnRoutes.ts';
 import supplierRoutes from './src/server/routes/supplierRoutes.ts';
@@ -163,8 +163,6 @@ app.use('/api/install', installRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api', brandCategoryRoutes);
-app.use('/api/brands', brandsRouter);
-app.use('/api/categories', categoriesRouter);
 app.use('/api/pos', posRoutes);
 app.use('/api/returns', returnRoutes);
 app.use('/api/suppliers', supplierRoutes);

@@ -233,17 +233,22 @@ function buildSubscriptionInfo(tenantRow?: any, pendingRenewalRequest?: any | nu
 
 function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?: any | null) {
   const mode = String(s.pricing_mode || 'FIXED').toUpperCase() === 'NEGOTIABLE' ? 'NEGOTIABLE' : 'FIXED';
-  const locked = false;
+  const isSetupLocked = Boolean(
+    tenantRow
+      ? tenantRow.onboarding_completed || tenantRow.is_onboarded || s.pricing_policy_locked || s.is_installed
+      : s.pricing_policy_locked || s.is_installed
+  );
+  const locked = isSetupLocked;
   const logo = s.logo || tenantRow?.logo_url || '';
   const receiptLogo = s.receipt_logo || logo || '';
   const showReceiptLogo = Boolean(s.show_receipt_logo);
   const subInfo = buildSubscriptionInfo(tenantRow, pendingRenewalRequest);
 
-  return {
-    id: s.id,
-    tenantId: s.tenant_id || tenantRow?.id || 1,
-    slug: tenantRow?.slug || 'tj-shoes',
-    tenantStatus: tenantRow?.status || 'ACTIVE',
+    return {
+      id: s.id,
+      tenantId: s.tenant_id || tenantRow?.id || 1,
+      slug: tenantRow?.slug || '',
+      tenantStatus: tenantRow?.status || 'ACTIVE',
     appKey: subInfo.appKey,
     app_key: subInfo.appKey,
     subscriptionPlan: subInfo.subscriptionPlan,
@@ -259,7 +264,11 @@ function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?:
     subscriptionInfo: subInfo,
     themeColor: tenantRow?.theme_color || '#2563EB',
     backgroundColor: tenantRow?.background_color || '#ffffff',
-    isOnboarded: tenantRow ? Boolean(tenantRow.is_onboarded) : true,
+    isOnboarded: tenantRow ? Boolean(tenantRow.is_onboarded || tenantRow.onboarding_completed) : true,
+    onboardingCompleted: isSetupLocked,
+    onboarding_completed: isSetupLocked,
+    initialSetupLocked: isSetupLocked,
+    initial_setup_locked: isSetupLocked,
     name: s.name,
     companyName: s.name,
     company_name: s.name,
@@ -319,8 +328,8 @@ router.get('/subscription', async (req: Request, res: Response) => {
     const subscriptionInfo = buildSubscriptionInfo(tenantRow, pendingRenewal);
     return res.json({
       tenantId: tenantRow?.id || tenantId,
-      slug: tenantRow?.slug || 'tj-shoes',
-      storeName: tenantRow?.name || 'TJ Shoes Flagship',
+      slug: tenantRow?.slug || '',
+      storeName: tenantRow?.name || 'Retail Store',
       appKey: subscriptionInfo.appKey,
       pendingRenewalRequest: pendingRenewal,
       subscriptionInfo,
@@ -329,8 +338,8 @@ router.get('/subscription', async (req: Request, res: Response) => {
     const fallbackSub = buildSubscriptionInfo(null, null);
     return res.status(200).json({
       tenantId: 1,
-      slug: 'tj-shoes',
-      storeName: 'TJ Shoes Flagship',
+      slug: '',
+      storeName: 'Retail Store',
       appKey: fallbackSub.appKey,
       pendingRenewalRequest: null,
       subscriptionInfo: fallbackSub,
@@ -361,11 +370,11 @@ router.post('/renew-subscription', async (req: Request, res: Response) => {
     const customNote = String(req.body?.notes || req.body?.message || '').trim();
     const fullNotes = customNote
       ? `[RENEWAL REQUEST • ${planLabel} • Key: ${tenantRow.app_key || 'N/A'}] ${customNote}`
-      : `Subscription renewal/extension request (${planLabel}) for store ${tenantRow.name} (${tenantRow.slug}.mypos.com) • App Key: ${tenantRow.app_key || 'N/A'}`;
+      : `Subscription renewal/extension request (${planLabel}) for store ${tenantRow.name} • App Key: ${tenantRow.app_key || 'N/A'}`;
 
     const storeName = String(cs.name || tenantRow.name || tenantRow.slug).trim();
     const ownerName = String(tenantRow.owner_name || `${storeName} Owner`).trim();
-    const ownerEmail = String(tenantRow.owner_email || cs.email || `admin@${tenantRow.slug}.mypos.com`).trim().toLowerCase();
+    const ownerEmail = String(tenantRow.owner_email || cs.email || `admin@${tenantRow.slug}.com`).trim().toLowerCase();
     const ownerPhone = String(tenantRow.owner_phone || cs.phone || '').trim();
     const businessAddress = String(tenantRow.business_address || tenantRow.address || cs.address || '').trim();
 
@@ -486,7 +495,7 @@ router.get('/', async (req: Request, res: Response) => {
       settings: {
         id: 0,
         tenantId: 1,
-        slug: 'tj-shoes',
+        slug: '',
         appKey: fallbackSub.appKey,
         app_key: fallbackSub.appKey,
         subscriptionPlan: fallbackSub.subscriptionPlan,
@@ -499,9 +508,9 @@ router.get('/', async (req: Request, res: Response) => {
         subscription_status: fallbackSub.subscriptionStatus,
         daysRemaining: fallbackSub.daysRemaining,
         subscriptionInfo: fallbackSub,
-        name: 'TJ Shoes Flagship',
-        companyName: 'TJ Shoes Flagship',
-        company_name: 'TJ Shoes Flagship',
+        name: 'Retail Store',
+        companyName: 'Retail Store',
+        company_name: 'Retail Store',
         phone: '',
         companyPhone: '',
         email: '',
@@ -563,17 +572,46 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
       is_installed: boolean;
       pricing_policy_locked: boolean;
       pricing_mode: string;
-    }>('SELECT id, is_installed, pricing_policy_locked, pricing_mode FROM company_settings WHERE tenant_id = $1 LIMIT 1', [tenantId]);
+      currency: string;
+      currency_name: string;
+      currency_symbol: string;
+      barcode_prefix: string;
+      purchase_prefix: string;
+      invoice_prefix: string;
+    }>(
+      'SELECT id, is_installed, pricing_policy_locked, pricing_mode, currency, currency_name, currency_symbol, barcode_prefix, purchase_prefix, invoice_prefix FROM company_settings WHERE tenant_id = $1 LIMIT 1',
+      [tenantId]
+    );
+
+    const tenantLockRes = await pgClient
+      .query<{ onboarding_completed: boolean; is_onboarded: boolean }>(
+        'SELECT onboarding_completed, is_onboarded FROM tenants WHERE id = $1 LIMIT 1',
+        [tenantId]
+      )
+      .catch(() => ({ rows: [] as Array<{ onboarding_completed: boolean; is_onboarded: boolean }> }));
 
     const currentRow = currentSettingsRes.rows[0];
+    const tenantLockRow = tenantLockRes.rows[0];
+    const isSetupAlreadyLocked = Boolean(
+      currentRow?.pricing_policy_locked ||
+        currentRow?.is_installed ||
+        tenantLockRow?.onboarding_completed ||
+        tenantLockRow?.is_onboarded
+    );
+
     let pricingMode = String(currentRow?.pricing_mode || 'FIXED').toUpperCase() === 'NEGOTIABLE' ? 'NEGOTIABLE' : 'FIXED';
 
     const requestedMode = req.body.pricingPolicy || req.body.pricing_policy || req.body.pricing_mode || req.body.pricingMode;
-    if (requestedMode) {
+    if (requestedMode && !isSetupAlreadyLocked) {
       pricingMode = String(requestedMode).toUpperCase() === 'NEGOTIABLE' ? 'NEGOTIABLE' : 'FIXED';
     }
 
-    const currencyCode = req.body.currency || 'PKR';
+    const finalCurrencyCode = isSetupAlreadyLocked && currentRow?.currency ? currentRow.currency : (req.body.currency || 'PKR');
+    const finalCurrencyName = isSetupAlreadyLocked && currentRow?.currency_name ? currentRow.currency_name : currencyName;
+    const finalCurrencySymbol = isSetupAlreadyLocked && currentRow?.currency_symbol ? currentRow.currency_symbol : currencySymbol;
+    const finalBarcodePrefix = isSetupAlreadyLocked && currentRow?.barcode_prefix ? currentRow.barcode_prefix : barcodePrefix;
+    const finalPurchasePrefix = isSetupAlreadyLocked && currentRow?.purchase_prefix ? currentRow.purchase_prefix : purchasePrefix;
+    const finalInvoicePrefix = isSetupAlreadyLocked && currentRow?.invoice_prefix ? currentRow.invoice_prefix : invoicePrefix;
 
     if (!companyName) {
       return res.status(400).json({ error: 'company_name is required.' });
@@ -588,21 +626,21 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
       }
     }
 
-    if (!currencyName) {
+    if (!finalCurrencyName) {
       return res.status(400).json({ error: 'currency_name is required (e.g., "Pakistani Rupee", "US Dollar").' });
     }
-    if (!currencySymbol) {
+    if (!finalCurrencySymbol) {
       return res.status(400).json({ error: 'currency_symbol is required (e.g., "Rs.", "$", "PKR").' });
     }
-    if (!/^\d{7}$/.test(barcodePrefix)) {
+    if (!/^\d{7}$/.test(finalBarcodePrefix)) {
       return res.status(400).json({
         error: 'barcode_prefix must be strictly 7 numeric digits (e.g., 0108923 or 2000001).',
       });
     }
-    if (!purchasePrefix) {
+    if (!finalPurchasePrefix) {
       return res.status(400).json({ error: 'purchase_prefix is required (e.g., "PO-").' });
     }
-    if (!invoicePrefix) {
+    if (!finalInvoicePrefix) {
       return res.status(400).json({ error: 'invoice_prefix is required (e.g., "INV-").' });
     }
 
@@ -615,7 +653,7 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
            currency_name = $9, currency = $10, currency_symbol = $11,
            barcode_prefix = $12, purchase_prefix = $13, invoice_prefix = $14,
            invoice_footer = $15, low_stock_limit = $16,
-           pricing_mode = $17, pricing_policy_locked = false, show_receipt_logo = $18, receipt_logo = $19, updated_at = NOW()
+           pricing_mode = $17, pricing_policy_locked = true, is_installed = true, show_receipt_logo = $18, receipt_logo = $19, updated_at = NOW()
          WHERE id = $20 AND tenant_id = $21
          RETURNING *`,
         [
@@ -627,12 +665,12 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
           taxId,
           website,
           logo,
-          currencyName,
-          currencyCode,
-          currencySymbol,
-          barcodePrefix,
-          purchasePrefix,
-          invoicePrefix,
+          finalCurrencyName,
+          finalCurrencyCode,
+          finalCurrencySymbol,
+          finalBarcodePrefix,
+          finalPurchasePrefix,
+          finalInvoicePrefix,
           invoiceFooter,
           lowStockLimit,
           pricingMode,
@@ -648,7 +686,7 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
            tenant_id, name, phone, email, address, strn, tax_id, tax_number, website, logo,
            currency_name, currency, currency_symbol, barcode_prefix, purchase_prefix, invoice_prefix,
            invoice_footer, low_stock_limit, pricing_mode, pricing_policy_locked, show_receipt_logo, receipt_logo, is_installed
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, false, $19, $20, true)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, true, $19, $20, true)
          RETURNING *`,
         [
           tenantId,
@@ -660,12 +698,12 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
           taxId,
           website,
           logo,
-          currencyName,
-          currencyCode,
-          currencySymbol,
-          barcodePrefix,
-          purchasePrefix,
-          invoicePrefix,
+          finalCurrencyName,
+          finalCurrencyCode,
+          finalCurrencySymbol,
+          finalBarcodePrefix,
+          finalPurchasePrefix,
+          finalInvoicePrefix,
           invoiceFooter,
           lowStockLimit,
           pricingMode,
@@ -675,14 +713,15 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
       );
     }
 
-    // Sync tenant metadata
+    // Sync tenant metadata and lock Initial Store Setup & POS Defaults
     await pgClient
       .query(
         `UPDATE tenants SET
            name = $1, logo_url = CASE WHEN $2 != '' THEN $2 ELSE logo_url END,
-           business_address = $3, tax_id = $4, currency = $5, currency_symbol = $6, updated_at = NOW()
+           business_address = $3, tax_id = $4, currency = $5, currency_symbol = $6,
+           onboarding_completed = true, is_onboarded = true, updated_at = NOW()
          WHERE id = $7`,
-        [companyName, logo, companyAddress, taxId, currencyCode, currencySymbol, tenantId]
+        [companyName, logo, companyAddress, taxId, finalCurrencyCode, finalCurrencySymbol, tenantId]
       )
       .catch(() => {});
 

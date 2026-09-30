@@ -222,8 +222,9 @@ export async function resolveTenantContext(req: Request): Promise<TenantRouteRes
     tax_id: string;
     currency: string;
     onboarding_completed: boolean;
+    is_onboarded: boolean;
   }>(
-    `SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, theme_color, background_color, logo_url, address, tax_id, currency, onboarding_completed
+    `SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, theme_color, background_color, logo_url, address, tax_id, currency, onboarding_completed, is_onboarded
      FROM tenants
      WHERE LOWER(slug) = LOWER($1)
      LIMIT 1`,
@@ -303,7 +304,7 @@ export async function resolveTenantContext(req: Request): Promise<TenantRouteRes
     address: row.address || '',
     taxId: row.tax_id || '',
     currency: row.currency || 'PKR',
-    onboardingCompleted: Boolean(row.onboarding_completed),
+    onboardingCompleted: Boolean(row.onboarding_completed || row.is_onboarded),
   };
 
   if (row.status === 'SUSPENDED' || effectiveSubscriptionStatus === 'SUSPENDED') {

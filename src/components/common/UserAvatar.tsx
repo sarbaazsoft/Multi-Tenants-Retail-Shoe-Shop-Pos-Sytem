@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User as UserIcon } from 'lucide-react';
 
 interface UserAvatarProps {
@@ -10,15 +10,6 @@ interface UserAvatarProps {
   showRoleBadge?: boolean;
 }
 
-function getInitials(name?: string): string {
-  if (!name || !name.trim()) return 'U';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
 export const UserAvatar: React.FC<UserAvatarProps> = ({
   name = 'User',
   avatarUrl,
@@ -28,19 +19,22 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
   showRoleBadge = false,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
-  const initials = getInitials(name);
-  const isAdmin = role?.toUpperCase() === 'ADMIN';
+  const isAdmin = role?.toUpperCase() === 'ADMIN' || role?.toUpperCase() === 'SUPERADMIN';
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [avatarUrl]);
 
   // Size definitions
   const sizeMap = {
     xs: {
       container: 'w-6 h-6 text-[10px]',
-      icon: 'w-3 h-3',
+      icon: 'w-3.5 h-3.5',
       badge: 'w-2 h-2 -bottom-0.5 -right-0.5',
     },
     sm: {
       container: 'w-7 h-7 text-xs',
-      icon: 'w-3.5 h-3.5',
+      icon: 'w-4 h-4',
       badge: 'w-2.5 h-2.5 -bottom-0.5 -right-0.5',
     },
     md: {
@@ -50,19 +44,18 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
     },
     lg: {
       container: 'w-12 h-12 text-sm',
-      icon: 'w-5 h-5',
+      icon: 'w-6 h-6',
       badge: 'w-3.5 h-3.5 bottom-0 right-0',
     },
     xl: {
       container: 'w-20 h-20 text-xl font-extrabold',
-      icon: 'w-8 h-8',
+      icon: 'w-10 h-10',
       badge: 'w-5 h-5 bottom-0 right-0',
     },
   };
 
   const currentSize = sizeMap[size] || sizeMap.md;
-  const defaultAvatar = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80';
-  const effectiveAvatar = avatarUrl && avatarUrl.trim() ? avatarUrl : defaultAvatar;
+  const effectiveAvatar = avatarUrl && avatarUrl.trim() ? avatarUrl.trim() : '';
   const hasValidImage = Boolean(effectiveAvatar && !imageFailed);
 
   return (
@@ -80,15 +73,11 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
           title={name}
           className={`${currentSize.container} rounded-full flex items-center justify-center font-bold tracking-wider text-white shadow-xs ${
             isAdmin
-              ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-amber-700 shadow-amber-900/20'
+              ? 'bg-gradient-to-br from-purple-600 via-indigo-600 to-purple-700 shadow-purple-900/20'
               : 'bg-gradient-to-br from-blue-600 via-indigo-600 to-slate-800 shadow-blue-900/20'
           }`}
         >
-          {initials ? (
-            <span>{initials}</span>
-          ) : (
-            <UserIcon className={currentSize.icon} />
-          )}
+          <UserIcon className={currentSize.icon} />
         </div>
       )}
 

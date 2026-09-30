@@ -60,7 +60,7 @@ router.get('/tenants/:slug/manifest', async (req: Request, res: Response) => {
       id: `/app/${tenant.slug}/`,
       name: `${tenant.name} — POS Terminal`,
       short_name: shortName,
-      description: `Dedicated Retail POS & Inventory Terminal for ${tenant.name} (${tenant.slug}.mypos.com)`,
+      description: `Dedicated Retail POS & Inventory Terminal for ${tenant.name}`,
       start_url: `/app/${tenant.slug}/login`,
       scope: `/app/${tenant.slug}/`,
       display: 'standalone',
@@ -124,8 +124,9 @@ router.get('/saas/resolve', async (req: Request, res: Response) => {
       logo_url: string;
       currency: string;
       onboarding_completed: boolean;
+      is_onboarded: boolean;
     }>(
-      `SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, theme_color, background_color, logo_url, currency, onboarding_completed
+      `SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, theme_color, background_color, logo_url, currency, onboarding_completed, is_onboarded
        FROM tenants
        ORDER BY id ASC`
     );
@@ -146,8 +147,8 @@ router.get('/saas/resolve', async (req: Request, res: Response) => {
         backgroundColor: t.background_color,
         logoUrl: t.logo_url,
         currency: t.currency,
-        onboardingCompleted: Boolean(t.onboarding_completed),
-        subdomainUrl: `${t.slug}.mypos.com`,
+        onboardingCompleted: Boolean(t.onboarding_completed || t.is_onboarded),
+        subdomainUrl: t.slug,
         appPath: `/app/${t.slug}`,
         manifestUrl: `/api/tenants/${t.slug}/manifest`,
       })),
@@ -191,7 +192,7 @@ router.post('/saas/store-requests', async (req: Request, res: Response) => {
     const existingTenant = await pgClient.query('SELECT id FROM tenants WHERE LOWER(slug) = $1', [cleanSlug]);
     if (existingTenant.rows.length > 0) {
       return res.status(409).json({
-        error: `The subdomain '${cleanSlug}.mypos.com' is already taken by an active store.`,
+        error: `The store slug '${cleanSlug}' is already taken by an active store.`,
       });
     }
 
@@ -218,7 +219,7 @@ router.post('/saas/store-requests', async (req: Request, res: Response) => {
       success: true,
       requestId: insertRes.rows[0].id,
       requestedSlug: cleanSlug,
-      message: `Store request for '${cleanSlug}.mypos.com' submitted! Our SuperAdmin team can now provision it with 1 click.`,
+      message: `Store request for '${String(storeName).trim()}' submitted! Our SuperAdmin team can now provision it with 1 click.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to submit store request: ' + err.message });
@@ -293,7 +294,7 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
       return {
         id: s.id,
         slug: s.slug,
-        subdomain: `${s.slug}.mypos.com`,
+        subdomain: s.slug,
         name: s.name,
         status: s.status,
         appKey: s.app_key || '',
@@ -310,7 +311,7 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
         address: s.address || '',
         taxId: s.tax_id || '',
         currency: s.currency || 'PKR',
-        onboardingCompleted: Boolean(s.onboarding_completed),
+        onboardingCompleted: Boolean(s.onboarding_completed || (s as any).is_onboarded),
         createdAt: s.created_at,
         productCount: parseInt(s.product_count || '0', 10),
         totalStockUnits: parseInt(s.total_stock_units || '0', 10),
@@ -404,10 +405,10 @@ router.patch('/superadmin/tenants/:id/status', requireAuth, requireSuperAdmin, a
       tenant: updated,
       message:
         updated.subscription_status === 'SUSPENDED'
-          ? `Store '${updated.name}' (${updated.slug}.mypos.com) has been suspended immediately.`
+          ? `Store '${updated.name}' has been suspended immediately.`
           : updated.subscription_status === 'EXPIRED'
-          ? `Store '${updated.name}' (${updated.slug}.mypos.com) subscription marked as expired.`
-          : `Store '${updated.name}' (${updated.slug}.mypos.com) is now active.`,
+          ? `Store '${updated.name}' subscription marked as expired.`
+          : `Store '${updated.name}' is now active.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to toggle store status: ' + err.message });
@@ -568,7 +569,7 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
         ownerEmail: row.owner_email,
         ownerPhone: row.owner_phone,
       },
-      message: `Subscription & App Key updated for '${row.name}' (${row.slug}.mypos.com).`,
+      message: `Subscription & App Key updated for '${row.name}'.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to update store subscription: ' + err.message });
@@ -631,7 +632,7 @@ async function provisionNewTenantStore(params: {
 
   const existing = await pgClient.query('SELECT id FROM tenants WHERE LOWER(slug) = $1', [cleanSlug]);
   if (existing.rows.length > 0) {
-    throw new Error(`Subdomain '${cleanSlug}.mypos.com' is already provisioned.`);
+    throw new Error(`Store slug '${cleanSlug}' is already provisioned.`);
   }
 
   const themeColor = params.themeColor || '#7C3AED';
@@ -717,7 +718,7 @@ async function provisionNewTenantStore(params: {
     tenantId: newTenant.id,
     slug: newTenant.slug,
     storeName: newTenant.name,
-    subdomain: `${newTenant.slug}.mypos.com`,
+    subdomain: newTenant.slug,
     appKey: newTenant.app_key,
     subscriptionPlan: newTenant.subscription_plan,
     subscriptionStartDate: new Date(newTenant.subscription_start_date).toISOString(),
@@ -791,9 +792,9 @@ router.get('/superadmin/tenants/:id/export-sql', requireAuth, requireSuperAdmin,
 
     const sections: string[] = [
       `-- ============================================================================`,
-      `-- MyPOS Multi-Tenant SaaS — Store SQL Backup Dump`,
+      `-- Store SQL Backup Dump`,
       `-- Store Name : ${tenant.name}`,
-      `-- Subdomain  : ${tenant.slug}.mypos.com (Tenant ID #${tenant.id})`,
+      `-- Store Slug : ${tenant.slug} (Tenant ID #${tenant.id})`,
       `-- Exported At: ${new Date().toISOString()}`,
       `-- ============================================================================`,
       `BEGIN;`,
@@ -1035,7 +1036,7 @@ async function handleDeleteTenantStore(req: AuthenticatedRequest, res: Response)
     return res.json({
       success: true,
       deletedStore: store,
-      message: `Store '${store.name}' (${store.slug}.mypos.com) and all its isolated records have been permanently deleted.`,
+      message: `Store '${store.name}' and all its isolated records have been permanently deleted.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to delete store tenant: ' + err.message });
@@ -1139,14 +1140,14 @@ router.post('/superadmin/store-requests/:id/approve', requireAuth, requireSuperA
           tenantId: updatedTenant.id,
           slug: updatedTenant.slug,
           storeName: updatedTenant.name,
-          subdomain: `${updatedTenant.slug}.mypos.com`,
+          subdomain: updatedTenant.slug,
           appKey: updatedTenant.app_key,
           subscriptionPlan: updatedTenant.subscription_plan,
           subscriptionStartDate: new Date(updatedTenant.subscription_start_date).toISOString(),
           subscriptionEndDate: new Date(updatedTenant.subscription_end_date).toISOString(),
           subscriptionStatus: 'ACTIVE',
         },
-        message: `Subscription renewed (${planLabel}) for '${updatedTenant.name}' (${updatedTenant.slug}.mypos.com) until ${formattedExpiry}!`,
+        message: `Subscription renewed (${planLabel}) for '${updatedTenant.name}' until ${formattedExpiry}!`,
       });
     }
 
@@ -1170,7 +1171,7 @@ router.post('/superadmin/store-requests/:id/approve', requireAuth, requireSuperA
     return res.status(201).json({
       success: true,
       provisioned,
-      message: `Store '${provisioned.storeName}' (${provisioned.subdomain}) provisioned!`,
+      message: `Store '${provisioned.storeName}' provisioned!`,
     });
   } catch (err: any) {
     await pgClient.query('ROLLBACK').catch(() => {});
@@ -1337,7 +1338,7 @@ router.post('/superadmin/tenants', requireAuth, requireSuperAdmin, async (req: A
     return res.status(201).json({
       success: true,
       provisioned,
-      message: `Store '${provisioned.storeName}' created at ${provisioned.subdomain}`,
+      message: `Store '${provisioned.storeName}' created successfully.`,
     });
   } catch (err: any) {
     await pgClient.query('ROLLBACK').catch(() => {});
@@ -1404,7 +1405,8 @@ router.get('/tenants/:slug/onboarding', async (req: Request, res: Response) => {
         ownerName: t.owner_name || 'Store Owner',
         ownerEmail: cs.email || t.admin_email || t.owner_email || '',
         ownerPhone: cs.phone || t.owner_phone || '',
-        onboardingCompleted: Boolean(t.onboarding_completed),
+        onboardingCompleted: Boolean(t.onboarding_completed || t.is_onboarded),
+        isLocked: Boolean(t.onboarding_completed || t.is_onboarded),
         productCount: t.product_count || 0,
       },
     });
@@ -1425,8 +1427,10 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       status: string;
       owner_name: string;
       owner_email: string;
+      onboarding_completed: boolean;
+      is_onboarded: boolean;
     }>(
-      `SELECT id, slug, name, status, owner_name, owner_email FROM tenants WHERE LOWER(slug) = $1 LIMIT 1`,
+      `SELECT id, slug, name, status, owner_name, owner_email, onboarding_completed, is_onboarded FROM tenants WHERE LOWER(slug) = $1 LIMIT 1`,
       [slug]
     );
 
@@ -1435,6 +1439,15 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     }
 
     const tenant = tenantRes.rows[0];
+
+    // Lock Initial Store Setup & POS Defaults once store owner has completed setup
+    if (tenant.onboarding_completed || tenant.is_onboarded) {
+      return res.status(403).json({
+        error:
+          'Initial Store Setup & POS Defaults is locked because this store has already been configured by the Store Owner.',
+        isLocked: true,
+      });
+    }
 
     const {
       storeName,
@@ -1483,7 +1496,8 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     ).trim();
     const finalInvoicePrefix = String(invoicePrefix || 'INV-').trim() || 'INV-';
     const finalPurchasePrefix = String(purchasePrefix || 'PUR-').trim() || 'PUR-';
-    const finalBarcodePrefix = String(barcodePrefix || '0108923').trim() || '0108923';
+    const rawDigitsBarcode = String(barcodePrefix || '0108923').replace(/\D/g, '');
+    const finalBarcodePrefix = rawDigitsBarcode.length === 7 ? rawDigitsBarcode : '0108923';
     const finalInvoiceFooter =
       String(
         invoiceFooter ||
@@ -1497,7 +1511,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     const finalPhone = String(phone || '').trim();
     const finalEmail = String(email || tenant.owner_email || '').trim().toLowerCase();
 
-    // Update tenants table and mark store ACTIVE + onboarded
+    // Update tenants table and mark store ACTIVE + onboarded (locked)
     await pgClient.query(
       `UPDATE tenants
        SET name = $1,
@@ -1531,7 +1545,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       ]
     );
 
-    // Sync tenant company_settings with all configured Initial Store Setup defaults
+    // Sync tenant company_settings with all configured Initial Store Setup defaults and lock POS defaults
     const settingsCheck = await pgClient.query('SELECT id FROM company_settings WHERE tenant_id = $1 LIMIT 1', [tenant.id]);
     if (settingsCheck.rows.length > 0) {
       await pgClient.query(
@@ -1552,6 +1566,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
              invoice_footer = $14,
              low_stock_limit = $15,
              pricing_mode = $16,
+             pricing_policy_locked = true,
              is_installed = true,
              updated_at = NOW()
          WHERE tenant_id = $17`,
@@ -1580,8 +1595,8 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
         `INSERT INTO company_settings (
            tenant_id, name, logo, address, tax_id, strn, tax_rate, currency, currency_symbol,
            phone, email, invoice_prefix, purchase_prefix, barcode_prefix, invoice_footer,
-           low_stock_limit, pricing_mode, is_installed
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true)`,
+           low_stock_limit, pricing_mode, pricing_policy_locked, is_installed
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true, true)`,
         [
           tenant.id,
           finalName,

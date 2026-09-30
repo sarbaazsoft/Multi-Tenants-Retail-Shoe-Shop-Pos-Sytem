@@ -46,7 +46,7 @@ export const SuspendedStoreView: React.FC<SuspendedStoreViewProps> = ({
             <Lock className="w-3.5 h-3.5" />
             {expired ? 'HTTP 403 • Subscription Expired' : 'HTTP 403 • Store Suspended'}
           </span>
-          <span className="text-xs font-mono text-slate-400">{slug}.mypos.com</span>
+          <span className="text-xs font-mono text-slate-400">{storeName}</span>
         </div>
 
         <div className="w-14 h-14 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mb-6">
@@ -67,14 +67,12 @@ export const SuspendedStoreView: React.FC<SuspendedStoreViewProps> = ({
               Your subscription key has expired. Please contact support to renew.
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              POS &amp; Dashboard access for <span className="font-semibold text-white">{storeName}</span> (
-              <span className="font-mono text-rose-300">{slug}.mypos.com</span>) is restricted until the store subscription key is renewed by platform administration.
+              POS &amp; Dashboard access for <span className="font-semibold text-white">{storeName}</span> is restricted until the store subscription key is renewed by platform administration.
             </p>
           </div>
         ) : (
           <p className="text-sm text-slate-300 leading-relaxed mb-6">
-            Access to <span className="font-semibold text-white">{storeName}</span> (
-            <span className="font-mono text-rose-300">{slug}.mypos.com</span>) has been temporarily suspended by the platform SuperAdmin. All POS terminals, inventory APIs, and staff sessions for this tenant are locked.
+            Access to <span className="font-semibold text-white">{storeName}</span> has been temporarily suspended by the platform SuperAdmin. All POS terminals, inventory APIs, and staff sessions for this tenant are locked.
           </p>
         )}
 
@@ -109,7 +107,7 @@ export const SuspendedStoreView: React.FC<SuspendedStoreViewProps> = ({
         )}
 
         <div className="rounded-xl bg-slate-950 border border-slate-800 p-4 text-xs text-slate-400 mb-6">
-          If you are the store owner or platform administrator, you can renew the subscription key or reactivate this tenant immediately from the <strong className="text-slate-200">SuperAdmin Control Panel</strong> (<span className="font-mono">mypos.com/admin</span>).
+          If you are the store owner or platform administrator, you can renew the subscription key or reactivate this tenant immediately from the <strong className="text-slate-200">SuperAdmin Control Panel</strong>.
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3">
@@ -137,7 +135,7 @@ export const SuspendedStoreView: React.FC<SuspendedStoreViewProps> = ({
             className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
-            Root Domain
+            Home
           </button>
         </div>
       </div>

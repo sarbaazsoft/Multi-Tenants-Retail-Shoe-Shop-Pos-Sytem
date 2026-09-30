@@ -53,12 +53,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  const activeSlug = (companySettings?.slug || 'tj-shoes').trim().toLowerCase();
-
-  const [storeCredentials, setStoreCredentials] = useState<{
-    owner: { name: string; email: string; password: string; role: string };
-    cashier: { name: string; email: string; password: string; role: string };
-  } | null>(null);
+  const activeSlug = (companySettings?.slug || '').trim().toLowerCase();
 
   // Hidden by default for a few ms, then fades in smoothly
   const [isVisible, setIsVisible] = useState(false);
@@ -71,27 +66,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
     setEmail('');
     setPassword('');
     setErrorMessage(null);
     setInfoMessage(null);
-
-    api.auth
-      .getStoreCredentials(activeSlug)
-      .then((res) => {
-        if (!cancelled && res?.owner && res?.cashier) {
-          setStoreCredentials({
-            owner: res.owner,
-            cashier: res.cashier,
-          });
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
   }, [activeSlug]);
 
   const storeName =
@@ -115,70 +93,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleQuickFill = async (roleType: 'owner' | 'cashier' | 'superadmin') => {
-    setErrorMessage(null);
-    setInfoMessage(null);
-    if (roleType === 'superadmin') {
-      setEmail('superadmin@mypos.com');
-      setPassword('superadmin123');
-      return;
-    }
-    let creds = storeCredentials;
-    if (!creds) {
-      try {
-        const res = await api.auth.getStoreCredentials(activeSlug);
-        if (res?.owner && res?.cashier) {
-          creds = { owner: res.owner, cashier: res.cashier };
-          setStoreCredentials(creds);
-        }
-      } catch {}
-    }
-
-    if (roleType === 'owner') {
-      const ownerEmail =
-        creds?.owner?.email ||
-        (activeSlug === 'tj-shoes'
-          ? 'owner@shoepos.com'
-          : activeSlug === 'mystore'
-          ? 'admin@mystore.com'
-          : activeSlug === 'apex-boots'
-          ? 'admin@apexboots.pk'
-          : companySettings?.email || `admin@${activeSlug}.mypos.com`);
-      const ownerPassword =
-        creds?.owner?.password ||
-        (activeSlug === 'tj-shoes' || activeSlug === 'mystore' || activeSlug === 'apex-boots'
-          ? 'admin123'
-          : `${activeSlug}@2026`);
-      setEmail(ownerEmail);
-      setPassword(ownerPassword);
-    } else {
-      const cashierEmail =
-        creds?.cashier?.email ||
-        (activeSlug === 'tj-shoes'
-          ? 'cashier@shoepos.com'
-          : activeSlug === 'mystore'
-          ? 'cashier@mystore.com'
-          : activeSlug === 'apex-boots'
-          ? 'cashier@apexboots.pk'
-          : `cashier@${activeSlug}.mypos.com`);
-      const cashierPassword =
-        creds?.cashier?.password ||
-        (activeSlug === 'tj-shoes' || activeSlug === 'mystore' || activeSlug === 'apex-boots'
-          ? 'cashier123'
-          : `${activeSlug}@cashier`);
-      setEmail(cashierEmail);
-      setPassword(cashierPassword);
-    }
-  };
-
   const handleForgot = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage(null);
+    setInfoMessage(null);
     try {
       const res = await api.auth.forgotPassword({ email });
-      setInfoMessage(`Password reset token generated: ${res.resetToken}`);
-      setResetToken(res.resetToken);
+      setResetToken('');
+      setInfoMessage(
+        res.message ||
+          'If the email exists in our system, a password reset verification token has been issued. Please enter your verification token below.'
+      );
       setTab('reset');
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to request reset token.');
@@ -191,11 +117,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage(null);
+    setInfoMessage(null);
     try {
-      await api.auth.resetPassword({ email, token: resetToken, newPassword });
+      await api.auth.resetPassword({ email, token: resetToken.trim(), newPassword });
       setInfoMessage('Password has been reset successfully! You can now log in.');
+      setResetToken('');
+      setNewPassword('');
+      setPassword('');
       setTab('login');
-      setPassword(newPassword);
     } catch (err: any) {
       setErrorMessage(err.message || 'Password reset failed.');
     } finally {
@@ -426,90 +355,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </>
                     )}
                   </button>
-
-                  {/* Quick Multi-Tenant Store Credentials Helper */}
-                  <div className="pt-3 border-t border-slate-200/80 dark:border-purple-900/50 space-y-2 text-[11px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 dark:text-purple-200/70 font-mono font-semibold">
-                        Quick Store Login ({activeSlug}):
-                      </span>
-                      <span className="text-[10px] text-slate-400 dark:text-purple-300/60 font-mono">
-                        1-Click Fill
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        id="quick-fill-owner-btn"
-                        type="button"
-                        onClick={() => handleQuickFill('owner')}
-                        className="px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100/90 dark:bg-purple-900/40 dark:hover:bg-purple-800/60 border border-purple-200/80 dark:border-purple-700/60 text-left transition cursor-pointer group"
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-bold text-purple-800 dark:text-purple-200 text-[11px]">
-                            Store Owner
-                          </span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-200/70 dark:bg-purple-800 text-purple-900 dark:text-purple-100 font-mono font-bold">
-                            ADMIN
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-purple-700/80 dark:text-purple-300/80 font-mono truncate mt-0.5">
-                          {storeCredentials?.owner?.email ||
-                            (activeSlug === 'tj-shoes'
-                              ? 'owner@shoepos.com'
-                              : activeSlug === 'mystore'
-                              ? 'admin@mystore.com'
-                              : activeSlug === 'apex-boots'
-                              ? 'admin@apexboots.pk'
-                              : `admin@${activeSlug}.mypos.com`)}
-                        </div>
-                      </button>
-
-                      <button
-                        id="quick-fill-cashier-btn"
-                        type="button"
-                        onClick={() => handleQuickFill('cashier')}
-                        className="px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-700/80 border border-slate-200/90 dark:border-slate-700 text-left transition cursor-pointer group"
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-bold text-slate-800 dark:text-slate-200 text-[11px]">
-                            Store Cashier
-                          </span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-mono font-bold">
-                            CASHIER
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono truncate mt-0.5">
-                          {storeCredentials?.cashier?.email ||
-                            (activeSlug === 'tj-shoes'
-                              ? 'cashier@shoepos.com'
-                              : activeSlug === 'mystore'
-                              ? 'cashier@mystore.com'
-                              : activeSlug === 'apex-boots'
-                              ? 'cashier@apexboots.pk'
-                              : `cashier@${activeSlug}.mypos.com`)}
-                        </div>
-                      </button>
-                    </div>
-
-                    <button
-                      id="quick-fill-superadmin-btn"
-                      type="button"
-                      onClick={() => handleQuickFill('superadmin')}
-                      className="w-full px-3 py-2 rounded-xl bg-amber-50/90 hover:bg-amber-100/90 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 border border-amber-200 dark:border-amber-800/60 flex items-center justify-between gap-2 text-left transition cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] whitespace-nowrap">
-                          Platform SuperAdmin
-                        </span>
-                        <span className="text-[10px] text-amber-700 dark:text-amber-300/80 font-mono truncate">
-                          superadmin@mypos.com
-                        </span>
-                      </div>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-200/80 dark:bg-amber-800 text-amber-900 dark:text-amber-100 font-mono font-bold shrink-0">
-                        SUPERADMIN
-                      </span>
-                    </button>
-                  </div>
                 </form>
               )}
 

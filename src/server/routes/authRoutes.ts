@@ -39,7 +39,7 @@ async function resolveTargetTenant(req: Request): Promise<{
   }
 
   const defRes = await pgClient.query<any>(
-    "SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, owner_name, owner_email, owner_phone FROM tenants WHERE slug = 'tj-shoes' OR id = 1 ORDER BY id ASC LIMIT 1"
+    'SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, owner_name, owner_email, owner_phone FROM tenants ORDER BY id ASC LIMIT 1'
   );
   return defRes.rows[0] || null;
 }
@@ -185,8 +185,8 @@ router.post('/login', async (req: Request, res: Response) => {
     const tenantId = Number.isInteger(parsedTid) && parsedTid > 0 ? parsedTid : 1;
     const isSuperAdminRole = String(user.role).toUpperCase() === 'SUPERADMIN';
     const isStoreAdminRole = String(user.role).toUpperCase() === 'ADMIN';
-    let tenantSlug = isSuperAdminRole ? 'admin' : requestedSlug || 'tj-shoes';
-    let tenantName = isSuperAdminRole ? 'MyPOS SaaS C-Panel' : 'TJ Shoes';
+    let tenantSlug = isSuperAdminRole ? 'admin' : requestedSlug || '';
+    let tenantName = isSuperAdminRole ? 'MyPOS SaaS C-Panel' : 'Retail Store';
     let onboardingCompleted = true;
     let subscriptionStatus = 'ACTIVE';
 
@@ -337,7 +337,7 @@ router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: Response) 
       user: {
         id: row.id,
         tenantId: effectiveTid,
-        slug: req.user!.slug || 'tj-shoes',
+        slug: req.user!.slug || '',
         name: row.name,
         email: row.email,
         phone: row.phone || '',
@@ -381,7 +381,7 @@ router.put('/profile', requireAuth, async (req: AuthenticatedRequest, res: Respo
     const updatedUser: AuthUser = {
       id: row.id,
       tenantId: req.user!.tenantId || (Number.isInteger(rowTid) && rowTid > 0 ? rowTid : 1),
-      slug: req.user!.slug || 'tj-shoes',
+      slug: req.user!.slug || '',
       name: row.name,
       email: row.email,
       phone: row.phone || '',
@@ -455,7 +455,9 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     const userRes = await pgClient.query('SELECT id, name, email, tenant_id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
     if (userRes.rows.length === 0) {
-      return res.json({ message: 'If the email exists in our system, a password reset link has been generated.' });
+      return res.json({
+        message: 'If the email exists in our system, a password reset verification token has been issued.',
+      });
     }
 
     const user: any = userRes.rows[0];
@@ -471,9 +473,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     );
 
     res.json({
-      message: 'Password reset token generated successfully.',
-      resetToken,
-      info: 'For testing counter recovery, you may use this token directly to reset your password.',
+      message: 'If the email exists in our system, a password reset verification token has been issued. Please enter your verification token to set a new password.',
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Forgot password failed: ' + err.message });

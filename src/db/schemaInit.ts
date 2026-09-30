@@ -307,7 +307,12 @@ export async function ensureDatabaseSchema(): Promise<void> {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS receipt_logo TEXT DEFAULT '';
     CREATE INDEX IF NOT EXISTS company_settings_tenant_idx ON company_settings(tenant_id);
 
-    UPDATE company_settings SET pricing_policy_locked = false;
+    UPDATE company_settings cs
+    SET pricing_policy_locked = true,
+        is_installed = true
+    FROM tenants t
+    WHERE cs.tenant_id = t.id
+      AND (t.onboarding_completed = true OR t.is_onboarded = true);
 
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
@@ -586,59 +591,24 @@ export async function ensureTenantStoreUsers(params: {
   cashier: StoreQuickCredential;
 }> {
   const tenantId = Number(params.tenantId) || 1;
-  const cleanSlug = (params.slug || 'tj-shoes').trim().toLowerCase();
+  const cleanSlug = (params.slug || 'store').trim().toLowerCase();
   const storeLabel = (params.storeName || cleanSlug).trim();
 
   // Determine canonical store-specific emails & default passwords
-  const defaultOwnerEmail =
-    cleanSlug === 'tj-shoes'
-      ? (params.ownerEmail || 'owner@shoepos.com').trim().toLowerCase()
-      : cleanSlug === 'mystore'
-      ? (params.ownerEmail || 'admin@mystore.com').trim().toLowerCase()
-      : cleanSlug === 'apex-boots'
-      ? (params.ownerEmail || 'admin@apexboots.pk').trim().toLowerCase()
-      : (params.ownerEmail || `admin@${cleanSlug}.mypos.com`).trim().toLowerCase();
+  const defaultOwnerEmail = (params.ownerEmail || `admin@${cleanSlug}.com`).trim().toLowerCase();
 
   const defaultOwnerName =
-    (params.ownerName && params.ownerName.trim()) ||
-    (cleanSlug === 'tj-shoes'
-      ? 'Tariq Javed (Owner)'
-      : cleanSlug === 'mystore'
-      ? 'Hamza Siddiqui (Owner)'
-      : cleanSlug === 'apex-boots'
-      ? 'Usman Ghani (Owner)'
-      : `${storeLabel} (Owner)`);
+    (params.ownerName && params.ownerName.trim()) || `${storeLabel} (Owner)`;
 
   const explicitPassword = params.ownerPassword && params.ownerPassword.trim() ? params.ownerPassword.trim() : '';
 
-  const defaultOwnerPassword =
-    explicitPassword ||
-    (cleanSlug === 'tj-shoes' || cleanSlug === 'mystore' || cleanSlug === 'apex-boots'
-      ? 'admin123'
-      : `${cleanSlug}@2026`);
+  const defaultOwnerPassword = explicitPassword || `${cleanSlug}@2026`;
 
-  const defaultCashierEmail =
-    cleanSlug === 'tj-shoes'
-      ? 'cashier@shoepos.com'
-      : cleanSlug === 'mystore'
-      ? 'cashier@mystore.com'
-      : cleanSlug === 'apex-boots'
-      ? 'cashier@apexboots.pk'
-      : `cashier@${cleanSlug}.mypos.com`;
+  const defaultCashierEmail = `cashier@${cleanSlug}.com`;
 
-  const defaultCashierName =
-    cleanSlug === 'tj-shoes'
-      ? 'Bilal Counter Cashier'
-      : cleanSlug === 'mystore'
-      ? 'MyStore Counter Cashier'
-      : cleanSlug === 'apex-boots'
-      ? 'Apex Counter Cashier'
-      : `${storeLabel} Cashier`;
+  const defaultCashierName = `${storeLabel} Cashier`;
 
-  const defaultCashierPassword =
-    cleanSlug === 'tj-shoes' || cleanSlug === 'mystore' || cleanSlug === 'apex-boots'
-      ? 'cashier123'
-      : `${cleanSlug}@cashier`;
+  const defaultCashierPassword = `${cleanSlug}@cashier`;
 
   // 1. Resolve or create Store Owner (ADMIN)
   const adminRes = await pgClient.query<{
@@ -789,224 +759,82 @@ export async function ensureTenantStoreUsers(params: {
 }
 
 /**
- * Seeds the SaaS Multi-Tenant Control Plane (Tenants, SuperAdmin account, and Pending Store Requests)
- * so that the SaaS Landing Page, SuperAdmin C-Panel, and Multi-Tenant POS work out of the box.
+ * Initializes the SaaS Multi-Tenant Control Plane (Global SuperAdmin account and subscription sync)
+ * without seeding any demo stores or demo store requests.
  */
 export async function ensureSaasControlPlane(): Promise<void> {
   if (saasControlPlaneInitialized) return;
   await ensureDatabaseSchema();
 
   try {
-    // 1. Seed Default Tenants if tenants table is empty
-    const tenantCheck = await pgClient.query<{ count: string }>('SELECT COUNT(*) as count FROM tenants');
-    const tenantCount = parseInt(tenantCheck.rows[0]?.count || '0', 10);
-
-    if (tenantCount === 0) {
-      const now = new Date();
-      const oneYearLater = calculateSubscriptionEndDate('YEARLY', now);
-      const sixMonthsLater = calculateSubscriptionEndDate('6_MONTHS', now);
-
-      // Tenant 1: TJ Shoes Flagship (Active & Onboarded, YEARLY Plan)
-      const t1 = await pgClient.query<{ id: number }>(
-        `INSERT INTO tenants (
-          name, slug, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status,
-          theme_color, background_color, logo_url,
-          owner_name, owner_email, owner_phone, business_address, tax_id,
-          currency, currency_symbol, plan, is_onboarded, onboarding_completed
-        ) VALUES ($1, $2, 'ACTIVE', 'APP-KEY-TJS1-9X4A', 'YEARLY', $8, $9, 'ACTIVE', '#2563EB', '#ffffff', '/icon.svg', $3, $4, $5, $6, $7, 'PKR', 'Rs.', 'YEARLY', true, true)
-        RETURNING id`,
-        [
-          'TJ Shoes Flagship',
-          'tj-shoes',
-          'Tariq Javed',
-          'owner@shoepos.com',
-          '+92 300 8451122',
-          'Shop #14, Mall Road Footwear Arcade, Lahore',
-          'NTN-4829104-8',
-          now,
-          oneYearLater,
-        ]
+    // 1. Ensure deleted_store_requests tracking table exists
+    await pgClient.exec(`
+      CREATE TABLE IF NOT EXISTS deleted_store_requests (
+        id SERIAL PRIMARY KEY,
+        request_id INTEGER,
+        requested_slug TEXT NOT NULL,
+        deleted_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
-      const t1Id = t1.rows[0]?.id || 1;
+      CREATE INDEX IF NOT EXISTS deleted_store_requests_slug_idx ON deleted_store_requests(requested_slug);
+    `);
 
-      // Ensure company_settings for Tenant 1
-      const csCheck = await pgClient.query('SELECT id FROM company_settings WHERE tenant_id = $1 LIMIT 1', [t1Id]);
-      if (csCheck.rows.length === 0) {
-        await pgClient.query(
-          `INSERT INTO company_settings (
-            tenant_id, name, phone, email, address, tax_id, strn, logo,
-            currency, currency_symbol, currency_name, invoice_prefix, purchase_prefix,
-            barcode_prefix, pricing_mode, is_installed
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, '/icon.svg', 'PKR', 'Rs.', 'Pakistani Rupee', 'INV-', 'PUR-', '0108923', 'FIXED', true)`,
-          [
-            t1Id,
-            'TJ Shoes Flagship',
-            '+92 300 8451122',
-            'owner@shoepos.com',
-            'Shop #14, Mall Road Footwear Arcade, Lahore',
-            'NTN-4829104-8',
-            'STRN-32004910',
-          ]
-        );
-      }
+    // One-time cleanup of any previously auto-seeded demo stores ('tj-shoes', 'mystore', 'apex-boots') and demo store requests ('stepup', 'sole-craft')
+    const seedPurgeCheck = await pgClient.query<{ count: string }>(
+      "SELECT COUNT(*) as count FROM deleted_store_requests WHERE requested_slug = '__seeded_stores_and_requests_removed_v1__'"
+    );
+    if (parseInt(seedPurgeCheck.rows[0]?.count || '0', 10) === 0) {
+      // Remove auto-seeded demo store requests
+      await pgClient
+        .query(
+          `DELETE FROM store_requests
+           WHERE LOWER(requested_slug) IN ('stepup', 'sole-craft')
+              OR owner_email IN ('ayesha@stepupfootwear.pk', 'faisal@solecraft.pk')`
+        )
+        .catch(() => {});
 
-      // Ensure Store Admin & Cashier for Tenant 1
-      const t1Users = await ensureTenantStoreUsers({
-        tenantId: t1Id,
-        slug: 'tj-shoes',
-        storeName: 'TJ Shoes Flagship',
-        ownerName: 'Tariq Javed (Owner)',
-        ownerEmail: 'owner@shoepos.com',
-        ownerPhone: '+92 300 8451122',
-      });
-      const ownerUserId = t1Users.owner.id;
+      // Find any auto-seeded demo stores by their seeded app_key / owner_email
+      const demoStoresRes = await pgClient
+        .query<{ id: number; slug: string }>(
+          `SELECT id, slug FROM tenants
+           WHERE app_key IN ('APP-KEY-TJS1-9X4A', 'APP-KEY-MYS2-7K3P', 'APP-KEY-APX3-5M8R')
+              OR (LOWER(slug) IN ('tj-shoes', 'mystore', 'apex-boots')
+                  AND LOWER(owner_email) IN ('owner@shoepos.com', 'admin@mystore.com', 'admin@apexboots.pk'))`
+        )
+        .catch(() => ({ rows: [] as Array<{ id: number; slug: string }> }));
 
-      // Seed initial products & sales for Tenant 1 if none exist
-      const prodCheck = await pgClient.query<{ count: string }>('SELECT COUNT(*) as count FROM products WHERE tenant_id = $1', [t1Id]);
-      if (parseInt(prodCheck.rows[0]?.count || '0', 10) === 0) {
-        const sampleProducts = [
-          ['Clarks', 'Formal Dress Shoes', 'CLK-FD-0001', '0108923000015', 'Oxford Classic Leather', 4200, 6500, 34],
-          ['Nike', 'Casual Shoes', 'NIK-CS-0002', '0108923000022', 'Air Runner Mesh Pro', 5500, 8900, 22],
-          ['Bata', 'Sandals & Chappals', 'BAT-SC-0003', '0108923000039', 'Peshawari Chappal Heritage', 2100, 3500, 48],
-          ['Skechers', 'Casual Shoes', 'SKC-CS-0004', '0108923000046', 'GoWalk Arch Fit Slip-On', 4800, 7600, 19],
-          ['Service', 'Boys Footwear', 'SRV-BF-0005', '0108923000053', 'Junior Velcro Active Trainer', 1600, 2600, 28],
+      for (const ds of demoStoresRes.rows) {
+        const tid = ds.id;
+        const cleanupTables = [
+          `DELETE FROM return_items WHERE tenant_id = $1`,
+          `DELETE FROM returns WHERE tenant_id = $1`,
+          `DELETE FROM sale_items WHERE tenant_id = $1`,
+          `DELETE FROM sales WHERE tenant_id = $1`,
+          `DELETE FROM purchase_return_items WHERE tenant_id = $1`,
+          `DELETE FROM purchase_returns WHERE tenant_id = $1`,
+          `DELETE FROM supplier_payments WHERE tenant_id = $1`,
+          `DELETE FROM purchase_items WHERE tenant_id = $1`,
+          `DELETE FROM purchases WHERE tenant_id = $1`,
+          `DELETE FROM stock_movements WHERE tenant_id = $1`,
+          `DELETE FROM products WHERE tenant_id = $1`,
+          `DELETE FROM customers WHERE tenant_id = $1`,
+          `DELETE FROM suppliers WHERE tenant_id = $1`,
+          `DELETE FROM company_settings WHERE tenant_id = $1`,
+          `DELETE FROM users WHERE tenant_id = $1 AND role != 'SUPERADMIN'`,
+          `DELETE FROM tenants WHERE id = $1`,
         ];
-        for (const [brand, category, sku, barcode, article, cost, selling, stock] of sampleProducts) {
-          await pgClient.query(
-            `INSERT INTO products (
-              tenant_id, name, brand, category, sku, barcode, article,
-              cost_price, selling_price, min_price, max_price, total_stock, low_stock_limit, active
-            ) VALUES ($1, $2, $3, $4, $5, $6, $2, $7, $8, $8, $8, $9, 5, true)`,
-            [t1Id, article, brand, category, sku, barcode, cost, selling, stock]
-          );
-        }
-
-        // Add sample customer & sales for Tenant 1
-        const custRes = await pgClient.query<{ id: number }>(
-          `INSERT INTO customers (tenant_id, name, phone, email, address)
-           VALUES ($1, 'Kamran Akmal', '0300-4112233', 'kamran@gmail.com', 'DHA Phase 5, Lahore')
-           RETURNING id`,
-          [t1Id]
-        );
-        const pRows = await pgClient.query<{ id: number; article: string; selling_price: number; cost_price: string }>(
-          'SELECT id, article, selling_price, cost_price FROM products WHERE tenant_id = $1 LIMIT 2',
-          [t1Id]
-        );
-        if (ownerUserId && pRows.rows.length > 0) {
-          const today = new Date().toISOString().split('T')[0];
-          const sRes = await pgClient.query<{ id: number }>(
-            `INSERT INTO sales (
-              tenant_id, invoice_number, customer_id, sale_date, subtotal, discount, total_amount,
-              payment_method, cash_received, change_given, created_by
-            ) VALUES ($1, 'INV-000001', $2, $3, 13000, 0, 13000, 'CASH', 15000, 2000, $4)
-            RETURNING id`,
-            [t1Id, custRes.rows[0]?.id || null, today, ownerUserId]
-          );
-          if (sRes.rows[0]?.id) {
-            await pgClient.query(
-              `INSERT INTO sale_items (
-                tenant_id, sale_id, product_id, product_name, quantity, unit_price, discount, subtotal, purchase_price
-              ) VALUES ($1, $2, $3, $4, 2, 6500, 0, 13000, 4200)`,
-              [t1Id, sRes.rows[0].id, pRows.rows[0].id, pRows.rows[0].article]
-            );
-          }
+        for (const q of cleanupTables) {
+          await pgClient.query(q, [tid]).catch(() => {});
         }
       }
 
-      // Tenant 2: mystore (Newly Provisioned, 6_MONTHS Plan)
-      const t2 = await pgClient.query<{ id: number }>(
-        `INSERT INTO tenants (
-          name, slug, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status,
-          theme_color, background_color, logo_url,
-          owner_name, owner_email, owner_phone, business_address, tax_id,
-          currency, currency_symbol, plan, is_onboarded, onboarding_completed
-        ) VALUES ($1, $2, 'ACTIVE', 'APP-KEY-MYS2-7K3P', '6_MONTHS', $8, $9, 'ACTIVE', '#7C3AED', '#ffffff', '/icon.svg', $3, $4, $5, $6, $7, 'PKR', 'Rs.', '6_MONTHS', false, false)
-        RETURNING id`,
-        [
-          'MyStore Footwear Studio',
-          'mystore',
-          'Hamza Siddiqui',
-          'admin@mystore.com',
-          '+92 333 9876543',
-          'Plot 22-C, Zamzama Commercial Lane 4, Karachi',
-          'NTN-7712930-4',
-          now,
-          sixMonthsLater,
-        ]
-      );
-      const t2Id = t2.rows[0]?.id || 2;
-
-      await pgClient.query(
-        `INSERT INTO company_settings (
-          tenant_id, name, phone, email, address, tax_id, logo,
-          currency, currency_symbol, currency_name, invoice_prefix, purchase_prefix,
-          barcode_prefix, pricing_mode, is_installed
-        ) VALUES ($1, 'MyStore Footwear Studio', '+92 333 9876543', 'admin@mystore.com', 'Plot 22-C, Zamzama Commercial Lane 4, Karachi', 'NTN-7712930-4', '/icon.svg', 'PKR', 'Rs.', 'Pakistani Rupee', 'MYS-', 'PUR-', '0204519', 'FIXED', true)`,
-        [t2Id]
-      );
-
-      await ensureTenantStoreUsers({
-        tenantId: t2Id,
-        slug: 'mystore',
-        storeName: 'MyStore Footwear Studio',
-        ownerName: 'Hamza Siddiqui (Owner)',
-        ownerEmail: 'admin@mystore.com',
-        ownerPhone: '+92 333 9876543',
-      });
-
-      await pgClient.query(
-        `INSERT INTO products (
-          tenant_id, name, brand, category, sku, barcode, article,
-          cost_price, selling_price, min_price, max_price, total_stock, low_stock_limit, active
-        ) VALUES
-        ($1, 'Velvet Block Heel Sandal', 'Local', 'Heeled Sandals', 'MYS-HS-0001', '0204519000014', 'Velvet Block Heel Sandal', 2800, 4900, 4900, 4900, 16, 5, true),
-        ($1, 'Suede Chelsea Loafer', 'Clarks', 'Formal Dress Shoes', 'MYS-FD-0002', '0204519000021', 'Suede Chelsea Loafer', 4100, 6800, 6800, 6800, 24, 5, true)`,
-        [t2Id]
-      );
-
-      // Tenant 3: apex-boots (Suspended Tenant to demonstrate real-time middleware suspension)
-      const t3 = await pgClient.query<{ id: number }>(
-        `INSERT INTO tenants (
-          name, slug, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status,
-          theme_color, background_color, logo_url,
-          owner_name, owner_email, owner_phone, business_address, tax_id,
-          currency, currency_symbol, plan, is_onboarded, onboarding_completed
-        ) VALUES ($1, $2, 'SUSPENDED', 'APP-KEY-APX3-5M8R', '6_MONTHS', $8, $9, 'SUSPENDED', '#DC2626', '#ffffff', '/icon.svg', $3, $4, $5, $6, $7, 'PKR', 'Rs.', '6_MONTHS', true, true)
-        RETURNING id`,
-        [
-          'Apex Boots Emporium',
-          'apex-boots',
-          'Usman Ghani',
-          'admin@apexboots.pk',
-          '+92 312 5566778',
-          'Saddar Bazaar, Rawalpindi',
-          'NTN-1192834-1',
-          now,
-          sixMonthsLater,
-        ]
-      );
-      const t3Id = t3.rows[0]?.id || 3;
-
-      await pgClient.query(
-        `INSERT INTO company_settings (
-          tenant_id, name, phone, email, address, tax_id, logo,
-          currency, currency_symbol, currency_name, invoice_prefix, purchase_prefix,
-          barcode_prefix, pricing_mode, is_installed
-        ) VALUES ($1, 'Apex Boots Emporium', '+92 312 5566778', 'admin@apexboots.pk', 'Saddar Bazaar, Rawalpindi', 'NTN-1192834-1', '/icon.svg', 'PKR', 'Rs.', 'Pakistani Rupee', 'APX-', 'PUR-', '0309812', 'FIXED', true)`,
-        [t3Id]
-      );
-
-      await ensureTenantStoreUsers({
-        tenantId: t3Id,
-        slug: 'apex-boots',
-        storeName: 'Apex Boots Emporium',
-        ownerName: 'Usman Ghani (Owner)',
-        ownerEmail: 'admin@apexboots.pk',
-        ownerPhone: '+92 312 5566778',
-      });
+      await pgClient
+        .query(
+          `INSERT INTO deleted_store_requests (request_id, requested_slug) VALUES (0, '__seeded_stores_and_requests_removed_v1__')`
+        )
+        .catch(() => {});
     }
 
-    // Ensure every existing tenant in the database has a unique app_key, subscription_plan, subscription dates, and verified Store Owner/Cashier users
+    // 2. Ensure every existing user-created tenant in the database has a unique app_key, subscription_plan, subscription dates, and verified Store Owner/Cashier users
     const allTenants = await pgClient.query<{
       id: number;
       slug: string;
@@ -1032,9 +860,7 @@ export async function ensureSaasControlPlane(): Promise<void> {
         needsSubUpdate = true;
       }
 
-      const nextPlan = normalizeSubscriptionPlan(
-        t.subscription_plan || (t.slug === 'mystore' || t.slug === 'apex-boots' ? '6_MONTHS' : 'YEARLY')
-      );
+      const nextPlan = normalizeSubscriptionPlan(t.subscription_plan || 'YEARLY');
       if (t.subscription_plan !== nextPlan) {
         needsSubUpdate = true;
       }
@@ -1086,7 +912,7 @@ export async function ensureSaasControlPlane(): Promise<void> {
 
     await syncExpiredTenantSubscriptions();
 
-    // 2. Ensure Global SuperAdmin User exists (superadmin@mypos.com / superadmin123)
+    // 3. Ensure Global SuperAdmin User exists (superadmin@mypos.com / superadmin123)
     const saCheck = await pgClient.query("SELECT id FROM users WHERE LOWER(email) = 'superadmin@mypos.com' LIMIT 1");
     const saHash = await bcrypt.hash('superadmin123', 10);
     if (saCheck.rows.length === 0) {
@@ -1102,38 +928,13 @@ export async function ensureSaasControlPlane(): Promise<void> {
       );
     }
 
-    // 3. Ensure deleted_store_requests tracking table exists and never re-seed store_requests once initialized
-    await pgClient.exec(`
-      CREATE TABLE IF NOT EXISTS deleted_store_requests (
-        id SERIAL PRIMARY KEY,
-        request_id INTEGER,
-        requested_slug TEXT NOT NULL,
-        deleted_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-      CREATE INDEX IF NOT EXISTS deleted_store_requests_slug_idx ON deleted_store_requests(requested_slug);
-    `);
-
-    // One-time cleanup of auto-reseeded demo store requests ('stepup', 'sole-craft') that reappeared after deletion
-    const cleanupMarkerCheck = await pgClient.query<{ count: string }>(
-      "SELECT COUNT(*) as count FROM deleted_store_requests WHERE requested_slug = '__reseed_cleanup_done__'"
-    );
-    if (parseInt(cleanupMarkerCheck.rows[0]?.count || '0', 10) === 0) {
-      await pgClient.query(
-        `DELETE FROM store_requests
-         WHERE LOWER(requested_slug) IN ('stepup', 'sole-craft')
-           AND status = 'PENDING'
-           AND owner_email IN ('ayesha@stepupfootwear.pk', 'faisal@solecraft.pk')`
-      );
-      await pgClient.query(
-        `INSERT INTO deleted_store_requests (request_id, requested_slug) VALUES (0, '__reseed_cleanup_done__')`
-      );
-    }
-
     // Purge any store_requests that match previously deleted slugs
     await pgClient.query(
       `DELETE FROM store_requests
        WHERE LOWER(requested_slug) IN (
-         SELECT LOWER(requested_slug) FROM deleted_store_requests WHERE requested_slug != '__reseed_cleanup_done__'
+         SELECT LOWER(requested_slug)
+         FROM deleted_store_requests
+         WHERE requested_slug NOT IN ('__reseed_cleanup_done__', '__seeded_stores_and_requests_removed_v1__')
        )`
     );
 

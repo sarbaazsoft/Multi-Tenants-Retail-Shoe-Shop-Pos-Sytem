@@ -2,147 +2,178 @@ import { Router } from 'express';
 import type { Response } from 'express';
 import { pgClient } from '../../db/index.ts';
 import { requireAuth } from '../auth.ts';
-import type { AuthenticatedRequest } from '../auth.ts';
-import { extractStrictTenantId } from '../../db/tenantDb.ts';
+import type { AuthenticatedRequest as AuthRequest } from '../auth.ts';
 
 const router = Router();
-export const brandsRouter = Router();
-export const categoriesRouter = Router();
 
-// Handlers for Brands: dynamically retrieved from distinct values in products table (scoped by tenant_id)
-const listBrandsHandler = async (req: AuthenticatedRequest, res: Response) => {
+function getTenantId(req: AuthRequest): number {
+  return Number((req as any).tenantId || req.user?.tenantId || 1);
+}
+
+// ==========================================
+// BRANDS ROUTES (/api/brands)
+// ==========================================
+
+// GET /api/brands - Fetch all brands (merged from brands table + distinct product brands)
+router.get('/brands', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const tenantId = extractStrictTenantId(req);
-    const result = await pgClient.query(
-      `SELECT p.brand as name,
-              COUNT(p.id)::int as product_count,
-              COALESCE(SUM(p.total_stock), 0)::int as total_units
-       FROM products p
-       WHERE p.tenant_id = $1 AND p.brand IS NOT NULL AND TRIM(p.brand) != ''
-       GROUP BY p.brand
-       ORDER BY p.brand ASC`,
+    const tenantId = getTenantId(req);
+
+    // Ensure "Local" default brand always exists for this tenant
+    await pgClient
+      .query(
+        `INSERT INTO brands (tenant_id, name)
+         SELECT $1, 'Local'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM brands WHERE tenant_id = $1 AND LOWER(TRIM(name)) = 'local'
+         )`,
+        [tenantId]
+      )
+      .catch(() => {});
+
+    // Sync any distinct brands from products into the brands table for this tenant
+    await pgClient
+      .query(
+        `INSERT INTO brands (tenant_id, name)
+         SELECT DISTINCT $1:: integer, TRIM(brand)
+         FROM products
+         WHERE tenant_id = $1
+           AND brand IS NOT NULL
+           AND TRIM(brand) != ''
+           AND LOWER(TRIM(brand)) NOT IN (
+             SELECT LOWER(TRIM(name)) FROM brands WHERE tenant_id = $1
+           )`,
+        [tenantId]
+      )
+      .catch(() => {});
+
+    const result = await pgClient.query<any>(
+      `SELECT id, name, created_at FROM brands
+       WHERE tenant_id = $1
+       ORDER BY CASE WHEN LOWER(TRIM(name)) = 'local' THEN 0 ELSE 1 END, LOWER(name) ASC`,
       [tenantId]
     );
-
-    let brands = result.rows.map((r: any, idx: number) => ({
-      id: idx + 1,
-      name: r.name,
-      logo: '',
-      product_count: r.product_count,
-      total_units: r.total_units,
-    }));
-
-    // Ensure 'Local' is always available as a suggestion
-    if (!brands.some((b: any) => b.name.toLowerCase() === 'local')) {
-      brands = [{ id: 0, name: 'Local', logo: '', product_count: 0, total_units: 0 }, ...brands];
-    }
-
-    res.json({ brands });
+    res.json({ brands: result.rows });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch brands: ' + err.message });
   }
-};
+});
 
-const createBrandHandler = async (req: any, res: Response) => {
-  const { name } = req.body || {};
-  const brandName = (name || '').trim();
-  res.status(200).json({
-    brand: { id: 1, name: brandName || 'Local' },
-    message: 'Brand noted as plain text string.',
-  });
-};
-
-const updateBrandHandler = async (req: any, res: Response) => {
-  const { name } = req.body || {};
-  res.json({ brand: { id: 1, name: name || 'Local' }, message: 'Brand updated.' });
-};
-
-const deleteBrandHandler = async (_req: any, res: Response) => {
-  res.json({ message: 'Brand removed.' });
-};
-
-// Handlers for Categories: dynamically retrieved from distinct values in products table (scoped by tenant_id)
-const listCategoriesHandler = async (req: AuthenticatedRequest, res: Response) => {
+// POST /api/brands - Create a new brand
+router.post('/brands', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const tenantId = extractStrictTenantId(req);
-    const result = await pgClient.query(
-      `SELECT p.category as name,
-              COUNT(p.id)::int as product_count,
-              COALESCE(SUM(p.total_stock), 0)::int as total_units
-       FROM products p
-       WHERE p.tenant_id = $1 AND p.category IS NOT NULL AND TRIM(p.category) != ''
-       GROUP BY p.category
-       ORDER BY p.category ASC`,
-      [tenantId]
-    );
-
-    let categories = result.rows.map((r: any, idx: number) => ({
-      id: idx + 1,
-      name: r.name,
-      product_count: r.product_count,
-      total_units: r.total_units,
-    }));
-
-    // Sane default categories if database catalog is fresh
-    const defaultCategories = ['Casual Shoes', 'Sports Shoes', 'Formal Shoes', 'Sandals & Chappals', 'Sneakers'];
-    for (const def of defaultCategories) {
-      if (!categories.some((c: any) => c.name.toLowerCase() === def.toLowerCase())) {
-        categories.push({
-          id: categories.length + 1,
-          name: def,
-          product_count: 0,
-          total_units: 0,
-        });
-      }
+    const tenantId = getTenantId(req);
+    const name = (req.body.name || '').trim();
+    if (!name) {
+      return res.status(400).json({ error: 'Brand name is required' });
     }
 
-    res.json({ categories });
+    const existing = await pgClient.query<any>(
+      `SELECT id, name, created_at FROM brands WHERE tenant_id = $1 AND LOWER(TRIM(name)) = LOWER($2) LIMIT 1`,
+      [tenantId, name]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(200).json({ brand: existing.rows[0], message: 'Brand already exists' });
+    }
+
+    const result = await pgClient.query<any>(
+      `INSERT INTO brands (tenant_id, name) VALUES ($1, $2) RETURNING id, name, created_at`,
+      [tenantId, name]
+    );
+
+    res.status(201).json({ brand: result.rows[0], message: 'Brand created successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to create brand: ' + err.message });
+  }
+});
+
+// DELETE /api/brands/:id - Delete a brand
+router.delete('/brands/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    const { id } = req.params;
+    await pgClient.query(`DELETE FROM brands WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+    res.json({ message: 'Brand deleted successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete brand: ' + err.message });
+  }
+});
+
+// ==========================================
+// CATEGORIES ROUTES (/api/categories)
+// ==========================================
+
+// GET /api/categories - Fetch all categories (merged from categories table + distinct product categories)
+router.get('/categories', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+
+    // Sync any distinct categories from products into the categories table for this tenant
+    await pgClient
+      .query(
+        `INSERT INTO categories (tenant_id, name)
+         SELECT DISTINCT $1::integer, TRIM(category)
+         FROM products
+         WHERE tenant_id = $1
+           AND category IS NOT NULL
+           AND TRIM(category) != ''
+           AND LOWER(TRIM(category)) NOT IN (
+             SELECT LOWER(TRIM(name)) FROM categories WHERE tenant_id = $1
+           )`,
+        [tenantId]
+      )
+      .catch(() => {});
+
+    const result = await pgClient.query<any>(
+      `SELECT id, name, created_at FROM categories WHERE tenant_id = $1 ORDER BY LOWER(name) ASC`,
+      [tenantId]
+    );
+    res.json({ categories: result.rows });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch categories: ' + err.message });
   }
-};
+});
 
-const createCategoryHandler = async (req: any, res: Response) => {
-  const { name } = req.body || {};
-  const catName = (name || '').trim();
-  res.status(200).json({
-    category: { id: 1, name: catName || 'Casual Shoes' },
-    message: 'Category noted as plain text string.',
-  });
-};
+// POST /api/categories - Create a new category
+router.post('/categories', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    const name = (req.body.name || '').trim();
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
 
-const updateCategoryHandler = async (req: any, res: Response) => {
-  const { name } = req.body || {};
-  res.json({ category: { id: 1, name: name || 'Casual Shoes' }, message: 'Category updated.' });
-};
+    const existing = await pgClient.query<any>(
+      `SELECT id, name, created_at FROM categories WHERE tenant_id = $1 AND LOWER(TRIM(name)) = LOWER($2) LIMIT 1`,
+      [tenantId, name]
+    );
 
-const deleteCategoryHandler = async (_req: any, res: Response) => {
-  res.json({ message: 'Category removed.' });
-};
+    if (existing.rows.length > 0) {
+      return res.status(200).json({ category: existing.rows[0], message: 'Category already exists' });
+    }
 
-// Mount routes
-router.get('/brands', requireAuth, listBrandsHandler);
-router.post('/brands', requireAuth, createBrandHandler);
-router.put('/brands/:id', requireAuth, updateBrandHandler);
-router.delete('/brands/:id', requireAuth, deleteBrandHandler);
+    const result = await pgClient.query<any>(
+      `INSERT INTO categories (tenant_id, name) VALUES ($1, $2) RETURNING id, name, created_at`,
+      [tenantId, name]
+    );
 
-router.get('/categories', requireAuth, listCategoriesHandler);
-router.post('/categories', requireAuth, createCategoryHandler);
-router.put('/categories/:id', requireAuth, updateCategoryHandler);
-router.delete('/categories/:id', requireAuth, deleteCategoryHandler);
+    res.status(201).json({ category: result.rows[0], message: 'Category created successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to create category: ' + err.message });
+  }
+});
 
-brandsRouter.get('/', requireAuth, listBrandsHandler);
-brandsRouter.get('/brands', requireAuth, listBrandsHandler);
-brandsRouter.post('/', requireAuth, createBrandHandler);
-brandsRouter.post('/brands', requireAuth, createBrandHandler);
-brandsRouter.put('/:id', requireAuth, updateBrandHandler);
-brandsRouter.delete('/:id', requireAuth, deleteBrandHandler);
-
-categoriesRouter.get('/', requireAuth, listCategoriesHandler);
-categoriesRouter.get('/categories', requireAuth, listCategoriesHandler);
-categoriesRouter.post('/', requireAuth, createCategoryHandler);
-categoriesRouter.post('/categories', requireAuth, createCategoryHandler);
-categoriesRouter.put('/:id', requireAuth, updateCategoryHandler);
-categoriesRouter.delete('/:id', requireAuth, deleteCategoryHandler);
+// DELETE /api/categories/:id - Delete a category
+router.delete('/categories/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    const { id } = req.params;
+    await pgClient.query(`DELETE FROM categories WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+    res.json({ message: 'Category deleted successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete category: ' + err.message });
+  }
+});
 
 export default router;

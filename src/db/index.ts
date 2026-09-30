@@ -1,11 +1,8 @@
 import pg from 'pg';
 import type { Pool as PgPool, PoolClient } from 'pg';
 const Pool = pg.Pool;
-import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { AsyncLocalStorage } from 'async_hooks';
-import * as schema from './schema.ts';
 import fs from 'fs';
 import path from 'path';
 
@@ -35,7 +32,6 @@ let isStandardPostgres = false;
 let dbInfo: DbConnectionInfo;
 let rawPool: PgPool | null = null;
 let pgliteClient: PGlite | null = null;
-let drizzleInstance: any;
 let waitReadyPromise: Promise<void>;
 
 const dataDir = path.resolve(process.cwd(), 'data/postgres_db');
@@ -113,9 +109,6 @@ async function initPgliteSafely(): Promise<void> {
       dbInfo.lastError = inMemErr?.message || String(inMemErr);
     }
   }
-  if (pgliteClient) {
-    drizzleInstance = drizzlePglite(pgliteClient, { schema });
-  }
 }
 
 if (rawDatabaseUrl && (rawDatabaseUrl.startsWith('postgres://') || rawDatabaseUrl.startsWith('postgresql://'))) {
@@ -180,8 +173,6 @@ if (rawDatabaseUrl && (rawDatabaseUrl.startsWith('postgres://') || rawDatabaseUr
     console.error('Unexpected PostgreSQL Pool Client Error:', err);
     dbInfo.lastError = msg;
   });
-
-  drizzleInstance = drizzlePg(rawPool, { schema });
 
   waitReadyPromise = rawPool.query('SELECT 1').then(() => {
     console.log(`✅ Connected to Standard PostgreSQL Server (${host}:${port}/${database})`);
@@ -347,24 +338,5 @@ export const pgClient = {
   },
 };
 
-const noOp = {
-  findMany: async () => [],
-  findFirst: async () => null,
-  findUnique: async () => null,
-  create: async (d: any) => d?.data ?? {},
-  update: async (d: any) => d?.data ?? {},
-  delete: async () => ({}),
-};
-
-export const db = new Proxy({} as any, {
-  get: (_, prop) => {
-    if (drizzleInstance) {
-      return (drizzleInstance as any)[prop];
-    }
-    return prop === 'query'
-      ? new Proxy({}, { get: () => noOp })
-      : async () => [];
-  },
-});
 export { isStandardPostgres, dbInfo, rawPool };
 

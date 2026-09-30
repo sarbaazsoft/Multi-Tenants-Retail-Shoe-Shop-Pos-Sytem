@@ -15,9 +15,9 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
-          name: 'TJ Shoes By SarbaazSoft',
-          short_name: 'TJ Shoes',
-          description: 'TJ Shoes - Professional Shoe Shop POS Terminal, Inventory, Barcode Scanner, and Purchasing System By SarbaazSoft.',
+          name: 'StepSync POS',
+          short_name: 'StepSync',
+          description: 'Multi-Store Retail POS Terminal, Inventory, Barcode Scanner, and Purchasing System.',
           theme_color: '#2563EB',
           background_color: '#ffffff',
           display: 'standalone',

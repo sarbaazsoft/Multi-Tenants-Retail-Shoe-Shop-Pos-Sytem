@@ -18,6 +18,7 @@ import {
   Mail,
   ShieldCheck,
   Sparkles,
+  Lock,
 } from 'lucide-react';
 import { api, setAuthSession } from '../../services/api';
 import { ShowroomBackground } from '../common/ShowroomBackground';
@@ -125,7 +126,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
           setThemeColor(t.themeColor || '#7C3AED');
           setBackgroundColor(t.backgroundColor || '#0F172A');
           setLogoUrl(t.logoUrl || '/pwa-512x512.png');
-          setAlreadyCompleted(Boolean(t.onboardingCompleted));
+          setAlreadyCompleted(Boolean(t.onboardingCompleted || (t as any).isLocked));
         }
       })
       .catch((err) => {
@@ -173,6 +174,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
 
   const handleFinishOnboarding = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (alreadyCompleted) return;
     setSaving(true);
     setError(null);
     try {
@@ -206,6 +208,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
           })),
       });
 
+      setAlreadyCompleted(true);
       if (res.token && res.user) {
         setAuthSession(res.token, res.user);
       }
@@ -223,9 +226,13 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
 
       <PublicHeader
         storeName={`${storeName || slug} — Initial Store Setup`}
-        badgeText="Owner Onboarding"
-        badgeVariant="setup"
-        subtitle={`First-Time Store Owner Configuration • ${slug}.mypos.com`}
+        badgeText={alreadyCompleted ? 'Setup Locked' : 'Owner Onboarding'}
+        badgeVariant={alreadyCompleted ? 'locked' : 'setup'}
+        subtitle={
+          alreadyCompleted
+            ? 'Initial Store Setup & POS Defaults Sealed'
+            : 'First-Time Store Owner Configuration'
+        }
         dbText="PostgreSQL • Tenant Isolated"
       />
 
@@ -237,7 +244,115 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                 <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
               </div>
               <div className="text-base font-bold text-slate-900 dark:text-white">
-                Loading Initial Store Setup ({slug}.mypos.com)...
+                Loading Initial Store Setup...
+              </div>
+            </div>
+          ) : alreadyCompleted ? (
+            <div
+              id="tenant-onboarding-locked-card"
+              className="app-card bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-200/80 dark:border-emerald-800/70 rounded-2xl sm:rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-slate-800">
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-700/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 shadow-sm">
+                    <Lock className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-mono font-bold mb-1.5">
+                      <Lock className="w-3 h-3" />
+                      <span>Initial Store Setup &amp; POS Defaults Locked</span>
+                    </div>
+                    <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                      Initial Store Setup &amp; POS Defaults
+                    </h1>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      Store setup for <strong>{storeName || slug}</strong> has already been completed by the Store Owner. To protect active POS invoice sequences, barcode standards, currency, and counter pricing rules, Initial Store Setup &amp; POS Defaults is permanently locked.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="self-start sm:self-center inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs sm:text-sm font-bold shadow-md transition cursor-pointer shrink-0"
+                >
+                  <span>Open Store POS Portal</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Locked POS Defaults Summary Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold uppercase text-slate-500 dark:text-slate-400">
+                    <span>Store Identity</span>
+                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                  </div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    {storeName || slug}
+                  </div>
+                  <div className="text-xs font-mono text-purple-600 dark:text-purple-300 truncate">
+                    {ownerName}
+                  </div>
+                  {phone && (
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
+                      Tel: {phone}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold uppercase text-slate-500 dark:text-slate-400">
+                    <span>Document &amp; Barcode Prefixes</span>
+                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                  </div>
+                  <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">
+                    Invoice: <span className="text-purple-600 dark:text-purple-300">{invoicePrefix}</span> • Purchase:{' '}
+                    <span className="text-purple-600 dark:text-purple-300">{purchasePrefix}</span>
+                  </div>
+                  <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">
+                    Barcode Prefix: <span className="text-emerald-600 dark:text-emerald-400">{barcodePrefix}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Low Stock Alert: {lowStockLimit} Pairs
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold uppercase text-slate-500 dark:text-slate-400">
+                    <span>Pricing &amp; Currency Policy</span>
+                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                  </div>
+                  <div className="text-xs font-bold text-slate-900 dark:text-white">
+                    {pricingMode === 'NEGOTIABLE'
+                      ? 'Negotiable Price Policy (NEGOTIABLE)'
+                      : 'Fixed Retail Price Policy (FIXED)'}
+                  </div>
+                  <div className="text-xs font-mono text-slate-700 dark:text-slate-300">
+                    Currency: <strong>{currency}</strong> • Sales Tax: <strong>{taxRate}%</strong>
+                  </div>
+                  {taxId && (
+                    <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                      Tax ID: {taxId}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2.5 text-amber-900 dark:text-amber-200">
+                  <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Commissioning Guard Active:</strong> Initial Store Setup &amp; POS Defaults is locked after first-time owner setup. Contact details, receipt logo, and printer hardware can be managed inside the Owner Portal under <strong>Settings</strong>.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shrink-0 cursor-pointer transition"
+                >
+                  Return to Dashboard →
+                </button>
               </div>
             </div>
           ) : (
@@ -251,7 +366,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                     </div>
                     <div>
                       <div className="text-xs font-mono font-semibold text-purple-600 dark:text-purple-300">
-                        Welcome, {ownerName} • {slug}.mypos.com
+                        Welcome, {ownerName}
                       </div>
                       <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
                         Initial Store Setup &amp; POS Defaults
@@ -495,7 +610,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                               type="email"
                               value={ownerEmail}
                               onChange={(e) => setOwnerEmail(e.target.value)}
-                              placeholder="owner@store.mypos.com"
+                              placeholder="Enter official store email"
                               className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
                             />
                           </div>

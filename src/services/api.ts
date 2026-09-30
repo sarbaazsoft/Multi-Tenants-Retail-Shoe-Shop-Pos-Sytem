@@ -66,14 +66,8 @@ export function getActiveTenantSlug(): string | null {
     }
     const params = new URLSearchParams(window.location.search);
     const domainParam = params.get('domain');
-    if (domainParam && domainParam.endsWith('.mypos.com')) {
-      const sub = domainParam.slice(0, -'.mypos.com'.length).toLowerCase();
-      if (sub === 'admin') return null;
-      if (sub && sub !== 'www') return sub;
-    }
-    const host = window.location.hostname.toLowerCase();
-    if (host.endsWith('.mypos.com')) {
-      const sub = host.slice(0, -'.mypos.com'.length);
+    if (domainParam) {
+      const sub = domainParam.split('.')[0].toLowerCase();
       if (sub === 'admin') return null;
       if (sub && sub !== 'www') return sub;
     }
@@ -229,7 +223,7 @@ export const api = {
       }),
   },
 
-  // SuperAdmin Control Panel Endpoints (`mypos.com/admin`)
+  // SuperAdmin Control Panel Endpoints
   superAdmin: {
     getOverview: () => apiFetch('/superadmin/overview'),
     toggleTenantStatus: (tenantId: number, status: 'ACTIVE' | 'SUSPENDED' | 'EXPIRED') =>
@@ -336,16 +330,6 @@ export const api = {
 
   install: {
     status: () => apiFetch<any>('/install/status'),
-    checkStatus: () => apiFetch<{ installed: boolean; isInstalled?: boolean }>('/install/status'),
-    setup: (data: any) => apiFetch('/install/setup', { method: 'POST', body: data }),
-    initDatabase: (dropTables?: boolean, password?: string) =>
-      apiFetch('/install/init-database', { method: 'POST', body: { dropTables, password } }),
-    saveSettings: (data: any) => apiFetch('/install/settings', { method: 'POST', body: data }),
-    createAdmin: (data: any) => apiFetch('/install/admin', { method: 'POST', body: data }),
-    loadDummyData: () => apiFetch('/install/load-dummy-data', { method: 'POST' }),
-    importSql: (sqlContent: string) =>
-      apiFetch('/install/import-sql', { method: 'POST', body: { sqlContent } }),
-    complete: () => apiFetch('/install/complete', { method: 'POST' }),
     reset: (password: string, email?: string, dropTables?: boolean) =>
       apiFetch('/install/reset', { method: 'POST', body: { password, email, dropTables } }),
     dropTables: (password: string) =>
@@ -382,30 +366,6 @@ export const api = {
     listApiTokens: () => apiFetch('/auth/api-tokens'),
     createApiToken: (name: string) => apiFetch('/auth/api-tokens', { method: 'POST', body: { name } }),
     deleteApiToken: (id: number) => apiFetch(`/auth/api-tokens/${id}`, { method: 'DELETE' }),
-  },
-  brands: {
-    list: () => apiFetch('/brands'),
-    create: (data: any) => apiFetch('/brands', { method: 'POST', body: data }),
-    update: (id: number, data: any) => apiFetch(`/brands/${id}`, { method: 'PUT', body: data }),
-    delete: (id: number) => apiFetch(`/brands/${id}`, { method: 'DELETE' }),
-  },
-  categories: {
-    list: () => apiFetch('/categories'),
-    create: (data: any) => apiFetch('/categories', { method: 'POST', body: data }),
-    update: (id: number, data: any) => apiFetch(`/categories/${id}`, { method: 'PUT', body: data }),
-    delete: (id: number) => apiFetch(`/categories/${id}`, { method: 'DELETE' }),
-  },
-  brandCategory: {
-    getBrands: () => apiFetch('/brands'),
-    listBrands: () => apiFetch('/brands'),
-    createBrand: (data: any) => apiFetch('/brands', { method: 'POST', body: data }),
-    updateBrand: (id: number, data: any) => apiFetch(`/brands/${id}`, { method: 'PUT', body: data }),
-    deleteBrand: (id: number) => apiFetch(`/brands/${id}`, { method: 'DELETE' }),
-    getCategories: () => apiFetch('/categories'),
-    listCategories: () => apiFetch('/categories'),
-    createCategory: (data: any) => apiFetch('/categories', { method: 'POST', body: data }),
-    updateCategory: (id: number, data: any) => apiFetch(`/categories/${id}`, { method: 'PUT', body: data }),
-    deleteCategory: (id: number) => apiFetch(`/categories/${id}`, { method: 'DELETE' }),
   },
   products: {
     list: (params?: { search?: string; category?: string; brand?: string; lowStock?: boolean; lowStockOnly?: boolean; limit?: number }) => {
@@ -475,6 +435,14 @@ export const api = {
     },
     update: (id: number, data: any) => apiFetch(`/products/${id}`, { method: 'PUT', body: data }),
     delete: (id: number) => apiFetch(`/products/${id}`, { method: 'DELETE' }),
+  },
+  brandCategory: {
+    getBrands: () => apiFetch('/brands'),
+    createBrand: (name: string) => apiFetch('/brands', { method: 'POST', body: { name } }),
+    deleteBrand: (id: number) => apiFetch(`/brands/${id}`, { method: 'DELETE' }),
+    getCategories: () => apiFetch('/categories'),
+    createCategory: (name: string) => apiFetch('/categories', { method: 'POST', body: { name } }),
+    deleteCategory: (id: number) => apiFetch(`/categories/${id}`, { method: 'DELETE' }),
   },
   pos: {
     verifyOverride: (credentials: { email?: string; password?: string; pin?: string }) =>
@@ -621,24 +589,14 @@ export const api = {
     updateUserRole: (id: number, role: string) =>
       apiFetch(`/settings/users/${id}/role`, { method: 'PATCH', body: { role } }),
     deleteUser: (id: number) => apiFetch(`/settings/users/${id}`, { method: 'DELETE' }),
-    loadDemoData: () => apiFetch('/settings/load-demo-data', { method: 'POST' }),
-    clearDemoData: () => apiFetch('/settings/clear-demo-data', { method: 'POST' }),
-    factoryReset: (email: string, password: string) =>
-      apiFetch('/settings/factory-reset', { method: 'POST', body: { email, password } }),
   },
   backup: {
     stats: () => apiFetch('/backup/stats'),
     export: () => apiFetch('/backup/export'),
-    exportData: () => apiFetch('/backup/export'),
     restore: (backupPayload: any) =>
       apiFetch('/backup/restore', { method: 'POST', body: backupPayload }),
-    restoreData: (backupPayload: any) =>
-      apiFetch('/backup/restore', { method: 'POST', body: backupPayload }),
     importSql: (sqlContent: string) =>
-      apiFetch('/backup/import-sql', { method: 'POST', body: { sqlContent } }),
-    loadDummyData: () => apiFetch('/backup/load-dummy-data', { method: 'POST' }),
-    loadFiveYearSqlDump: () =>
-      apiFetch('/backup/load-five-year-sql', { method: 'POST' }),
+      apiFetch('/backup/import-sql', { method: 'POST', body: { sql: sqlContent, sqlContent } }),
   },
   notifications: {
     list: () => apiFetch('/notifications'),

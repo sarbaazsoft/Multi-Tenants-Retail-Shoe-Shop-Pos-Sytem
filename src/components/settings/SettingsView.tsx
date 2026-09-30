@@ -32,7 +32,6 @@ import {
   KeyRound,
   TrendingUp,
   Sliders,
-  Percent,
   Tag,
   Camera,
   Upload,
@@ -243,13 +242,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Store Settings Form
   const [formData, setFormData] = useState({
-    company_name: companySettings?.company_name || companySettings?.companyName || companySettings?.name || 'T.J Shoes Collection',
-    company_phone: companySettings?.company_phone || companySettings?.companyPhone || companySettings?.phone || '+92-321-2257340' || '',
-    company_email: companySettings?.company_email || companySettings?.companyEmail || companySettings?.email || 'sale@tjshoes.com',
-    company_address: companySettings?.company_address || companySettings?.companyAddress || companySettings?.address || 'Shop #1, Al-Rehman Arcade Oppositer Abdullah Masaala, Jatpat Mkt, Lyari, Khi',
+    company_name: companySettings?.company_name || companySettings?.companyName || companySettings?.name || '',
+    company_phone: companySettings?.company_phone || companySettings?.companyPhone || companySettings?.phone || '',
+    company_email: companySettings?.company_email || companySettings?.companyEmail || companySettings?.email || '',
+    company_address: companySettings?.company_address || companySettings?.companyAddress || companySettings?.address || '',
     strn: companySettings?.strn || '',
-    tax_id: companySettings?.tax_id || companySettings?.taxId || companySettings?.tax_number || companySettings?.taxNumber || 'NTN-1122',
-    website: companySettings?.website || 'www.tjshoes.com',
+    tax_id: companySettings?.tax_id || companySettings?.taxId || companySettings?.tax_number || companySettings?.taxNumber || '',
+    website: companySettings?.website || '',
     logo: companySettings?.logo || '',
     show_receipt_logo: Boolean(companySettings?.show_receipt_logo ?? companySettings?.showReceiptLogo ?? false),
     receipt_logo: companySettings?.receipt_logo || companySettings?.receiptLogo || companySettings?.logo || '',
@@ -1336,7 +1335,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         setFormErrors({ ...formErrors, company_name: '' });
                       }
                     }}
-                    placeholder="e.g., TJ Shoes Collection"
+                    placeholder="e.g., Apex Footwear"
                     className={`capitalize w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-bold text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
                       formErrors.company_name
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
@@ -1403,7 +1402,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         setFormErrors({ ...formErrors, company_email: '' });
                       }
                     }}
-                    placeholder="e.g., sale@tjshoes.com"
+                    placeholder="e.g., info@store.com"
                     className={`w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
                       formErrors.company_email
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
@@ -1663,23 +1662,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* CARD 2: STORE PREFIXES & CURRENCY SETTINGS */}
+          {/* CARD 2: STORE PREFIXES & CURRENCY SETTINGS (POS DEFAULTS — Locked after initial store setup) */}
           <div className="bg-white dark:bg-[#131B2E] p-5 sm:p-6 rounded-2xl border border-slate-200 dark:border-purple-800/60 shadow-sm transition-colors">
             {/* Card Header */}
-            <div className="flex items-center justify-between pb-4 mb-5 border-b border-slate-100 dark:border-purple-900/40">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 mb-5 border-b border-slate-100 dark:border-purple-900/40 gap-3">
               <div className="flex items-center space-x-3.5">
                 <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-purple-500/20 border border-blue-100 dark:border-purple-400/30 text-blue-600 dark:text-purple-300 flex items-center justify-center shrink-0 shadow-2xs">
                   <Coins className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white tracking-tight">Store Prefixes &amp; Currency Settings</h3>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white tracking-tight flex flex-wrap items-center gap-2">
+                    <span>Store Prefixes &amp; Currency Settings (POS Defaults)</span>
+                    {formData.pricing_policy_locked && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold border border-amber-200 dark:border-amber-800/60 flex items-center gap-1">
+                        <Lock className="w-3 h-3 text-amber-500" />
+                        Locked After Initial Setup
+                      </span>
+                    )}
+                  </h3>
                   <p className="text-xs text-slate-500 dark:text-purple-200/70 mt-0.5 font-normal">
-                    System identifiers, currency parameters, and 7-digit barcode standards
+                    {formData.pricing_policy_locked
+                      ? 'Core POS defaults (currency, 7-digit barcode prefix, and invoice/purchase prefixes) are permanently locked after initial store setup.'
+                      : 'System identifiers, currency parameters, and 7-digit barcode standards required to run POS'}
                   </p>
                 </div>
               </div>
-              <span className="text-xs font-semibold px-3 py-1 rounded-xl bg-slate-100 dark:bg-purple-950/60 text-slate-700 dark:text-purple-200 border border-slate-200 dark:border-purple-800/60">
-                System Formats
+              <span className="text-xs font-semibold px-3 py-1 rounded-xl bg-slate-100 dark:bg-purple-950/60 text-slate-700 dark:text-purple-200 border border-slate-200 dark:border-purple-800/60 flex items-center gap-1.5 shrink-0">
+                {formData.pricing_policy_locked && <Lock className="w-3.5 h-3.5 text-amber-500" />}
+                <span>{formData.pricing_policy_locked ? 'POS Defaults Locked' : 'System Formats'}</span>
               </span>
             </div>
 
@@ -1689,15 +1699,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 mb-1.5 flex items-center justify-between">
                   <span>
                     Currency Name <span className="text-rose-500 font-bold">*</span>
-                 
                   </span>
+                  {formData.pricing_policy_locked && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                      <Lock className="w-2.5 h-2.5" /> Locked
+                    </span>
+                  )}
                 </label>
                 <div className="relative">
                   <Coins className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                   <input
                     type="text"
                     value={formData.currency_name}
+                    disabled={Boolean(formData.pricing_policy_locked)}
+                    readOnly={Boolean(formData.pricing_policy_locked)}
                     onChange={(e) => {
+                      if (formData.pricing_policy_locked) return;
                       setFormData({ ...formData, currency_name: toTitleCaseLive(e.target.value) });
                       if (formErrors.currency_name) {
                         setFormErrors({ ...formErrors, currency_name: '' });
@@ -1705,7 +1722,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     }}
                     placeholder='e.g., "Pakistani Rupee", "US Dollar"'
                     className={`capitalize w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-medium text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formErrors.currency_name
+                      formData.pricing_policy_locked
+                        ? 'opacity-75 cursor-not-allowed select-none border-slate-200 dark:border-slate-800'
+                        : formErrors.currency_name
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
                         : 'border-slate-300 dark:border-slate-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20'
                     }`}
@@ -1723,15 +1742,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 mb-1.5 flex items-center justify-between">
                   <span>
                     Currency Symbol <span className="text-rose-500 font-bold">*</span>
-                 
                   </span>
+                  {formData.pricing_policy_locked && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                      <Lock className="w-2.5 h-2.5" /> Locked
+                    </span>
+                  )}
                 </label>
                 <div className="relative">
                   <span className="font-bold text-slate-400 absolute left-3.5 top-3 text-xs pointer-events-none">₨</span>
                   <input
                     type="text"
                     value={formData.currency_symbol}
+                    disabled={Boolean(formData.pricing_policy_locked)}
+                    readOnly={Boolean(formData.pricing_policy_locked)}
                     onChange={(e) => {
+                      if (formData.pricing_policy_locked) return;
                       setFormData({ ...formData, currency_symbol: e.target.value });
                       if (formErrors.currency_symbol) {
                         setFormErrors({ ...formErrors, currency_symbol: '' });
@@ -1739,7 +1765,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     }}
                     placeholder='e.g., "Rs.", "$", "PKR"'
                     className={`w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-bold font-mono text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formErrors.currency_symbol
+                      formData.pricing_policy_locked
+                        ? 'opacity-75 cursor-not-allowed select-none border-slate-200 dark:border-slate-800'
+                        : formErrors.currency_symbol
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
                         : 'border-slate-300 dark:border-slate-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20'
                     }`}
@@ -1755,9 +1783,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {/* barcode_prefix (Strictly 7 Digits with Live Barcode SVG Visual) */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                    Barcode Prefix <span className="text-rose-500 font-bold">*</span>
-                 
+                  <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <span>
+                      Barcode Prefix <span className="text-rose-500 font-bold">*</span>
+                    </span>
+                    {formData.pricing_policy_locked && (
+                      <Lock className="w-3 h-3 text-amber-500" />
+                    )}
                   </label>
                   <span
                     className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
@@ -1775,7 +1807,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="text"
                     value={formData.barcode_prefix}
                     maxLength={7}
+                    disabled={Boolean(formData.pricing_policy_locked)}
+                    readOnly={Boolean(formData.pricing_policy_locked)}
                     onChange={(e) => {
+                      if (formData.pricing_policy_locked) return;
                       const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 7);
                       setFormData({ ...formData, barcode_prefix: digitsOnly });
                       if (formErrors.barcode_prefix && digitsOnly.length === 7) {
@@ -1784,7 +1819,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     }}
                     placeholder="8961234"
                     className={`w-full h-11 pl-10 pr-24 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-mono font-bold tracking-wider text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formData.barcode_prefix.length === 7
+                      formData.pricing_policy_locked
+                        ? 'opacity-75 cursor-not-allowed select-none border-emerald-600/50 dark:border-emerald-500/40'
+                        : formData.barcode_prefix.length === 7
                         ? 'border-emerald-600/80 dark:border-emerald-500/70 focus:ring-2 focus:ring-emerald-500/20'
                         : formErrors.barcode_prefix
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
@@ -1822,13 +1859,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span>
                     Purchase Order Prefix <span className="text-rose-500 font-bold">*</span>
                   </span>
+                  {formData.pricing_policy_locked && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                      <Lock className="w-2.5 h-2.5" /> Locked
+                    </span>
+                  )}
                 </label>
                 <div className="relative">
                   <Hash className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                   <input
                     type="text"
                     value={formData.purchase_prefix}
+                    disabled={Boolean(formData.pricing_policy_locked)}
+                    readOnly={Boolean(formData.pricing_policy_locked)}
                     onChange={(e) => {
+                      if (formData.pricing_policy_locked) return;
                       setFormData({ ...formData, purchase_prefix: e.target.value });
                       if (formErrors.purchase_prefix) {
                         setFormErrors({ ...formErrors, purchase_prefix: '' });
@@ -1836,7 +1881,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     }}
                     placeholder='e.g., "PUR-"'
                     className={`w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-mono font-bold text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formErrors.purchase_prefix
+                      formData.pricing_policy_locked
+                        ? 'opacity-75 cursor-not-allowed select-none border-slate-200 dark:border-slate-800'
+                        : formErrors.purchase_prefix
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
                         : 'border-slate-300 dark:border-slate-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20'
                     }`}
@@ -1855,13 +1902,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span>
                     Sales Invoice Prefix <span className="text-rose-500 font-bold">*</span>
                   </span>
+                  {formData.pricing_policy_locked && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                      <Lock className="w-2.5 h-2.5" /> Locked
+                    </span>
+                  )}
                 </label>
                 <div className="relative">
                   <Receipt className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                   <input
                     type="text"
                     value={formData.invoice_prefix}
+                    disabled={Boolean(formData.pricing_policy_locked)}
+                    readOnly={Boolean(formData.pricing_policy_locked)}
                     onChange={(e) => {
+                      if (formData.pricing_policy_locked) return;
                       setFormData({ ...formData, invoice_prefix: e.target.value });
                       if (formErrors.invoice_prefix) {
                         setFormErrors({ ...formErrors, invoice_prefix: '' });
@@ -1869,7 +1924,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     }}
                     placeholder='e.g., "INV-", "REC-" '
                     className={`w-full h-11 pl-10 pr-3.5 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-mono font-bold text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formErrors.invoice_prefix
+                      formData.pricing_policy_locked
+                        ? 'opacity-75 cursor-not-allowed select-none border-slate-200 dark:border-slate-800'
+                        : formErrors.invoice_prefix
                         ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
                         : 'border-slate-300 dark:border-slate-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20'
                     }`}
@@ -1948,14 +2005,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Disabled / Read-Only Pricing Policy Selector */}
+            {/* Pricing Policy Selector (Locked once initial store setup is completed) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Fixed Price Option (Disabled / Read-only) */}
+              {/* Fixed Price Option */}
               <button
                 type="button"
-                disabled
-                aria-disabled="true"
-                className={`p-4 rounded-xl text-left transition-all border relative cursor-not-allowed select-none ${
+                disabled={Boolean(formData.pricing_policy_locked)}
+                aria-disabled={Boolean(formData.pricing_policy_locked)}
+                onClick={() => {
+                  if (!formData.pricing_policy_locked) {
+                    setFormData({ ...formData, pricing_mode: 'FIXED' });
+                  }
+                }}
+                className={`p-4 rounded-xl text-left transition-all border relative select-none ${
+                  formData.pricing_policy_locked ? 'cursor-not-allowed' : 'cursor-pointer'
+                } ${
                   formData.pricing_mode === 'FIXED'
                     ? 'bg-purple-50/90 dark:bg-purple-950/40 border-purple-500 dark:border-purple-500 shadow-xs ring-2 ring-purple-400/20'
                     : 'bg-slate-50/70 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-55'
@@ -1979,7 +2043,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {formData.pricing_mode === 'FIXED' && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-600 text-white">
                       <Lock className="w-2.5 h-2.5" />
-                      Active &amp; Locked
+                      {formData.pricing_policy_locked ? 'Active & Locked' : 'Selected'}
                     </span>
                   )}
                 </div>
@@ -1990,12 +2054,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </p>
               </button>
 
-              {/* Negotiable Price Option (Disabled / Read-only) */}
+              {/* Negotiable Price Option */}
               <button
                 type="button"
-                disabled
-                aria-disabled="true"
-                className={`p-4 rounded-xl text-left transition-all border relative cursor-not-allowed select-none ${
+                disabled={Boolean(formData.pricing_policy_locked)}
+                aria-disabled={Boolean(formData.pricing_policy_locked)}
+                onClick={() => {
+                  if (!formData.pricing_policy_locked) {
+                    setFormData({ ...formData, pricing_mode: 'NEGOTIABLE' });
+                  }
+                }}
+                className={`p-4 rounded-xl text-left transition-all border relative select-none ${
+                  formData.pricing_policy_locked ? 'cursor-not-allowed' : 'cursor-pointer'
+                } ${
                   formData.pricing_mode === 'NEGOTIABLE'
                     ? 'bg-indigo-50/90 dark:bg-indigo-950/40 border-indigo-500 dark:border-indigo-500 shadow-xs ring-2 ring-indigo-400/20'
                     : 'bg-slate-50/70 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-55'
@@ -2019,7 +2090,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {formData.pricing_mode === 'NEGOTIABLE' && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-600 text-white">
                       <Lock className="w-2.5 h-2.5" />
-                      Active &amp; Locked
+                      {formData.pricing_policy_locked ? 'Active & Locked' : 'Selected'}
                     </span>
                   )}
                 </div>
@@ -2460,15 +2531,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* Quick Action: Open Install Wizard Preview */}
+          {/* Quick Action: Initial Store Setup & POS Defaults Status */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-purple-950/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs border border-slate-200 dark:border-purple-800/60">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-blue-600 dark:text-purple-300" />
-                <span className="font-bold text-xs text-slate-900 dark:text-white">Setup Wizard Interface</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {installStatus?.isInstalled || formData.pricing_policy_locked ? (
+                  <Lock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Sparkles className="w-4 h-4 text-blue-600 dark:text-purple-300" />
+                )}
+                <span className="font-bold text-xs text-slate-900 dark:text-white">
+                  Initial Store Setup &amp; POS Defaults
+                </span>
+                {(installStatus?.isInstalled || formData.pricing_policy_locked) && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800/70">
+                    <Lock className="w-2.5 h-2.5" />
+                    LOCKED AFTER SETUP
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 dark:text-purple-200/70">
-                Launch the setup wizard interface to preview the first-time setup flow or re-verify store profile steps.
+                {installStatus?.isInstalled || formData.pricing_policy_locked
+                  ? 'Initial Store Setup & POS Defaults have been completed by the Store Owner and are permanently locked against unauthorized modification.'
+                  : 'Launch the setup wizard interface to complete first-time store configuration and POS defaults.'}
               </p>
             </div>
             <button
@@ -2482,8 +2567,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               }}
               className="bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-700 hover:via-indigo-700 hover:to-purple-800 text-white border border-purple-400/40 dark:border-purple-400/50 font-bold text-xs py-2.5 px-4 rounded-xl shadow-md shadow-purple-600/25 dark:shadow-[0_0_14px_rgba(147,51,234,0.3)] transition-all shrink-0 flex items-center gap-2 cursor-pointer active:scale-95"
             >
-              <span>Open Setup Wizard</span>
-              <ExternalLink className="w-3.5 h-3.5" />
+              {installStatus?.isInstalled || formData.pricing_policy_locked ? (
+                <>
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>View Locked Setup Status</span>
+                </>
+              ) : (
+                <>
+                  <span>Open Initial Store Setup</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </>
+              )}
             </button>
           </div>
 

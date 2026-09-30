@@ -21,11 +21,9 @@ import { SupplierManagement } from './components/suppliers/SupplierManagement.ts
 import { DashboardOverview } from './components/dashboard/DashboardOverview.tsx';
 import { AuthModal } from './components/auth/AuthModal.tsx';
 import { UserProfileModal } from './components/auth/UserProfileModal.tsx';
-import { InstallWizard } from './components/install/InstallWizard.tsx';
 import { OfflineToastNotification } from './components/common/OfflineToastNotification.tsx';
 import { PublicLayout } from './components/common/PublicLayout.tsx';
 import { SammiAssistantView } from './components/chat/SammiAssistantView.tsx';
-import { MultiTenantTopBar } from './components/saas/MultiTenantTopBar.tsx';
 import { SaasLandingPage } from './components/saas/SaasLandingPage.tsx';
 import { UnknownStore404View } from './components/saas/UnknownStore404View.tsx';
 import { SuspendedStoreView } from './components/saas/SuspendedStoreView.tsx';
@@ -101,8 +99,8 @@ function detectInitialRouteFromLocation(): {
   }
 
   const domainParam = searchParams.get('domain');
-  if (domainParam && domainParam.endsWith('.mypos.com')) {
-    const sub = domainParam.slice(0, -'.mypos.com'.length).toLowerCase();
+  if (domainParam) {
+    const sub = domainParam.replace(/\.mypos\.com$/i, '').toLowerCase();
     if (sub === 'admin') {
       return { mode: 'SUPERADMIN', slug: null, requestedSlugParam };
     }
@@ -184,19 +182,6 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [selectedSupplierForPurchase, setSelectedSupplierForPurchase] = useState<{ id?: number; name?: string } | null>(null);
 
-  const [isInstalled, setIsInstalled] = useState<boolean | null>(() => {
-    try {
-      const cachedInstalled = localStorage.getItem('pos_is_installed');
-      if (cachedInstalled !== null) {
-        return cachedInstalled === 'true';
-      }
-      return true;
-    } catch {
-      return true;
-    }
-  });
-  const [showInstallWizard, setShowInstallWizard] = useState(false);
-
   const effectiveStoreName =
     activeTenant?.name ||
     companySettings?.name ||
@@ -250,7 +235,6 @@ export default function App() {
     try {
       const slugToQuery = targetSlug !== undefined ? targetSlug : requestedSlug;
       const res = await api.saas.resolve({
-        domain: slugToQuery ? `${slugToQuery}.mypos.com` : undefined,
         slug: slugToQuery || undefined,
       });
 
@@ -324,14 +308,12 @@ export default function App() {
         api.settings.get().catch(() => null),
       ]);
 
-      let installed = true;
       if (statusRes !== null && statusRes.isInstalled !== undefined) {
-        installed = Boolean(statusRes.isInstalled);
+        const installed = Boolean(statusRes.isInstalled);
         try {
           localStorage.setItem('pos_is_installed', String(installed));
         } catch {}
       }
-      setIsInstalled(installed);
 
       if (settingsRes?.settings) {
         setCompanySettings(settingsRes.settings);
@@ -348,17 +330,6 @@ export default function App() {
             localStorage.setItem('cached_store_name', resolvedName);
           } catch {}
         }
-      }
-
-      const isInstallUrl =
-        window.location.pathname === '/installationWizard' ||
-        window.location.pathname === '/install' ||
-        window.location.search.includes('install=true');
-
-      if (isInstallUrl) {
-        setShowInstallWizard(true);
-      } else {
-        setShowInstallWizard(false);
       }
 
       // Verify existing JWT token & check if user belongs to the active tenant
@@ -479,7 +450,7 @@ export default function App() {
       setRequestedSlug(missingSlug);
       setActiveTenant(null);
       setSaasMode('TENANT_NOT_FOUND');
-      window.history.pushState({}, '', `/?domain=${encodeURIComponent(missingSlug)}.mypos.com`);
+      window.history.pushState({}, '', '/');
       return;
     }
 
@@ -574,9 +545,6 @@ export default function App() {
       if (settingsRes?.settings) {
         setCompanySettings(settingsRes.settings);
       }
-      if (statusRes) {
-        setIsInstalled(statusRes.isInstalled);
-      }
       await refreshTenantDirectory(activeTenant?.slug);
     } catch (err) {
       console.error(err);
@@ -641,15 +609,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full flex flex-col bg-slate-100 dark:bg-[#0A0E1A] text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors duration-200">
-      {/* MULTI-TENANT SUBDOMAIN & ROUTE SWITCHER TOP BAR */}
-      <MultiTenantTopBar
-        currentMode={saasMode}
-        activeTenant={activeTenant}
-        requestedSlug={requestedSlug}
-        availableTenants={availableTenants}
-        onNavigateDomain={handleNavigateDomain}
-      />
-
       {/* 1. ROOT DOMAIN SAAS LANDING PAGE (`mypos.com`) */}
       {saasMode === 'LANDING' && (
         <SaasLandingPage
@@ -745,7 +704,6 @@ export default function App() {
               } catch {}
             }
             setActiveTenant((prev) => (prev ? { ...prev, onboardingCompleted: true } : prev));
-            setIsInstalled(true);
             setCurrentTab('dashboard');
             await handleNavigateDomain({ mode: 'TENANT', slug: completedSlug });
           }}
@@ -784,37 +742,12 @@ export default function App() {
                 </p>
               </div>
             </PublicLayout>
-          ) : showInstallWizard ? (
-            <InstallWizard
-              isAlreadyInstalled={Boolean(isInstalled)}
-              onInstalled={({ user, settings }) => {
-                if (user) {
-                  const dbRole = (user?.role || 'ADMIN').toUpperCase();
-                  const normalizedUser = {
-                    ...user,
-                    role: dbRole,
-                    originalRole: dbRole,
-                    isSimulatedCashier: false,
-                  };
-                  setCurrentUser(normalizedUser);
-                }
-                if (settings) {
-                  setCompanySettings(settings);
-                }
-                setIsInstalled(true);
-                setShowInstallWizard(false);
-                initializeApp();
-              }}
-              onCancelToLogin={() => {
-                setShowInstallWizard(false);
-              }}
-            />
           ) : !currentUser ? (
             <AuthModal
               companySettings={{
                 ...companySettings,
                 name: effectiveStoreName,
-                slug: activeTenant?.slug || requestedSlug || companySettings?.slug || 'tj-shoes',
+                slug: activeTenant?.slug || requestedSlug || companySettings?.slug || '',
               }}
               onSuccess={(user) => {
                 const dbRole = (user?.role || 'ADMIN').toUpperCase();
@@ -886,7 +819,6 @@ export default function App() {
                   } catch {}
                 }
                 setActiveTenant((prev) => (prev ? { ...prev, onboardingCompleted: true } : prev));
-                setIsInstalled(true);
                 setCurrentTab('dashboard');
                 await handleNavigateDomain({ mode: 'TENANT', slug: completedSlug });
               }}
@@ -1065,7 +997,7 @@ export default function App() {
                   >
                     SarbaazSoft
                   </a>{' '}
-                  © 2026 • Tenant: <span className="font-mono">{activeTenant?.slug || 'mystore'}.mypos.com</span>
+                  © 2026 • {effectiveStoreName}
                 </footer>
               </div>
             </div>

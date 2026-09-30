@@ -15,7 +15,6 @@ import {
   ChevronRight,
   WifiOff,
   Store,
-  Lock,
   ThumbsUp,
   X,
   Building2,
@@ -194,11 +193,18 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     },
   ];
 
+  const handlePreviewStoreClick = () => {
+    if (availableTenants.length > 0 && availableTenants[0]?.slug) {
+      onOpenStore(availableTenants[0].slug);
+    } else {
+      openGetStartedWithPlan('1_YEAR_RS_18000');
+    }
+  };
+
   const pakistanStores = [
     {
       brand: 'Bata',
       city: 'Lahore',
-      slug: 'tj-shoes',
       renderLogo: () => (
         <span className="font-serif italic font-black text-2xl tracking-tight text-[#E11D2E]">
           Bata
@@ -208,7 +214,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'stylo',
       city: 'Karachi',
-      slug: 'mystore',
       renderLogo: () => (
         <span className="font-sans font-extrabold text-2xl tracking-tight text-[#C81E68]">
           stylo
@@ -218,7 +223,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'Clarks',
       city: 'Islamabad',
-      slug: 'tj-shoes',
       renderLogo: () => (
         <span className="font-serif italic font-bold text-2xl tracking-tight text-[#0F172A]">
           Clarks
@@ -228,7 +232,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'NIKE',
       city: 'Faisalabad',
-      slug: 'mystore',
       renderLogo: () => (
         <div className="flex flex-col items-center leading-none">
           <span className="font-sans italic font-black text-lg tracking-tighter text-[#0F172A]">
@@ -243,7 +246,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'Servis',
       city: 'Multan',
-      slug: 'tj-shoes',
       renderLogo: () => (
         <span className="font-serif italic font-extrabold text-2xl tracking-tight text-[#DC2626]">
           Servis
@@ -253,7 +255,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'Borjan',
       city: 'Rawalpindi',
-      slug: 'apex-boots',
       renderLogo: () => (
         <span className="inline-block px-2.5 py-0.5 rounded bg-[#1E3A8A] text-[#FACC15] font-extrabold text-base tracking-tight">
           Borjan
@@ -263,7 +264,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'Footwear World',
       city: 'Peshawar',
-      slug: 'mystore',
       renderLogo: () => (
         <div className="flex flex-col items-center leading-none text-[#0F172A] font-extrabold text-sm">
           <span>Footwear</span>
@@ -274,7 +274,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
     {
       brand: 'NDURE',
       city: 'Quetta',
-      slug: 'tj-shoes',
       renderLogo: () => (
         <span className="font-sans font-black text-lg tracking-wider text-[#DC2626]">
           NDURE
@@ -472,7 +471,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                  onClick={handlePreviewStoreClick}
                   className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-xl bg-white hover:bg-blue-50/70 text-[#0A1633] border border-[#3B82F6] font-bold text-sm shadow-xs transition cursor-pointer whitespace-nowrap"
                 >
                   <span className="w-5 h-5 rounded-full border-2 border-[#0A1633] flex items-center justify-center">
@@ -595,7 +594,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                         {posMockShoes.map((item, idx) => (
                           <div
                             key={idx}
-                            onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                            onClick={handlePreviewStoreClick}
                             className="p-1.5 rounded-lg border border-slate-200/90 bg-white hover:border-blue-400 transition cursor-pointer text-center"
                           >
                             <div className="h-7 flex items-center justify-center">
@@ -678,7 +677,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                         </div>
                         <button
                           type="button"
-                          onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                          onClick={handlePreviewStoreClick}
                           className="w-full mt-1 py-1.5 rounded-lg bg-[#0066FF] hover:bg-[#0052CC] text-white font-bold text-[9px] shadow-xs transition cursor-pointer"
                         >
                           F9 - Checkout
@@ -813,7 +812,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
               <div className="grid grid-cols-3 gap-3 pt-2">
                 {/* Preview 1: Executive Dashboard */}
                 <div
-                  onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                  onClick={handlePreviewStoreClick}
                   className="group cursor-pointer text-center"
                 >
                   <div className="h-28 rounded-xl bg-white border border-slate-200 shadow-sm group-hover:border-blue-400 group-hover:shadow-md transition overflow-hidden flex flex-col justify-between p-2 text-left">
@@ -850,7 +849,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
 
                 {/* Preview 2: POS Counter */}
                 <div
-                  onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                  onClick={handlePreviewStoreClick}
                   className="group cursor-pointer text-center"
                 >
                   <div className="h-28 rounded-xl bg-white border border-slate-200 shadow-sm group-hover:border-blue-400 group-hover:shadow-md transition overflow-hidden flex flex-col justify-between p-2 text-left">
@@ -879,7 +878,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
 
                 {/* Preview 3: Barcode Labels */}
                 <div
-                  onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                  onClick={handlePreviewStoreClick}
                   className="group cursor-pointer text-center"
                 >
                   <div className="h-28 rounded-xl bg-gradient-to-br from-[#334155] to-[#0F172A] border border-slate-200 shadow-sm group-hover:border-blue-400 group-hover:shadow-md transition overflow-hidden flex items-center justify-center p-2">
@@ -904,7 +903,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                 return (
                   <div
                     key={index}
-                    onClick={() => onOpenStore(availableTenants[0]?.slug || 'tj-shoes')}
+                    onClick={handlePreviewStoreClick}
                     className="group bg-white hover:bg-[#F8FBFF] rounded-2xl border border-slate-200/80 hover:border-blue-300 p-4 shadow-[0_2px_10px_rgba(15,23,42,0.03)] hover:shadow-md transition-all cursor-pointer flex items-start justify-between gap-3.5"
                   >
                     <div className="flex items-start gap-3.5 min-w-0">
@@ -965,7 +964,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
             {pakistanStores.map((st, idx) => (
               <div
                 key={idx}
-                onClick={() => onOpenStore(st.slug)}
+                onClick={handlePreviewStoreClick}
                 className="bg-white hover:bg-blue-50/40 rounded-xl border border-slate-200/80 hover:border-blue-300 p-4 shadow-2xs hover:shadow-md transition cursor-pointer flex flex-col items-center justify-between text-center h-28"
               >
                 <div className="h-10 flex items-center justify-center">
@@ -1165,10 +1164,10 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                 Start Your ShoePOS Store
               </span>
               <h3 className="text-xl font-extrabold text-[#0A1633]">
-                Register Your Shoe Store Subdomain
+                Register Your Shoe Store
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Reserve your dedicated store URL and launch your POS &amp; Inventory workspace.
+                Create your dedicated store workspace and launch your POS &amp; Inventory suite.
               </p>
             </div>
 
@@ -1239,7 +1238,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Subdomain Slug *
+                      Store Slug *
                     </label>
                     <div className="flex items-center rounded-xl border border-slate-300 focus-within:border-[#0066FF] overflow-hidden">
                       <input
@@ -1250,9 +1249,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                         placeholder="metroshoes"
                         className="w-full px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none"
                       />
-                      <span className="px-2.5 py-2 bg-slate-100 text-slate-500 text-xs font-mono border-l border-slate-300">
-                        .mypos.com
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -1333,7 +1329,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                   <span>
                     {submitting
                       ? 'Submitting Request...'
-                      : `Submit Store Request (${requestedSlug || 'yourstore'}.mypos.com)`}
+                      : 'Submit Store Request'}
                   </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
@@ -1390,68 +1386,89 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-              {availableTenants.map((tenant) => (
-                <div
-                  key={tenant.id}
-                  className="rounded-xl border border-slate-200 p-4 flex flex-col justify-between hover:border-blue-300 transition bg-slate-50/40"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="font-extrabold text-sm text-[#0A1633] truncate">
-                        {tenant.name}
-                      </span>
-                      <span
-                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                          tenant.status === 'ACTIVE'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-rose-100 text-rose-800'
-                        }`}
-                      >
-                        {tenant.status}
-                      </span>
-                    </div>
-                    <div className="text-xs font-mono text-slate-500 mb-3">
-                      {tenant.slug}.mypos.com
-                    </div>
-                    <div className="text-[11px] font-mono text-slate-500 mb-4 flex items-center justify-between">
-                      <span>Manifest:</span>
-                      <a
-                        href={`/api/tenants/${tenant.slug}/manifest`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[#0066FF] hover:underline inline-flex items-center gap-1"
-                      >
-                        webmanifest <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowStoresModal(false);
-                        onOpenStore(tenant.slug);
-                      }}
-                      className="flex-1 py-2 px-3 rounded-lg bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-bold transition cursor-pointer"
-                    >
-                      Login to Store
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowStoresModal(false);
-                        onOpenOnboarding(tenant.slug);
-                      }}
-                      className="py-2 px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition cursor-pointer"
-                    >
-                      Setup
-                    </button>
-                  </div>
+            {availableTenants.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center space-y-3">
+                <Store className="w-8 h-8 text-slate-400 mx-auto" />
+                <div className="text-sm font-bold text-[#0A1633]">No Stores Provisioned Yet</div>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  No stores have been created yet. Submit a new store request or sign in to the SuperAdmin C-Panel to provision your first store.
+                </p>
+                <div className="flex items-center justify-center gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowStoresModal(false);
+                      openGetStartedWithPlan('1_YEAR_RS_18000');
+                    }}
+                    className="px-4 py-2 rounded-lg bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-bold transition cursor-pointer"
+                  >
+                    Request a Store
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowStoresModal(false);
+                      onOpenSuperAdmin();
+                    }}
+                    className="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition cursor-pointer"
+                  >
+                    Open SuperAdmin C-Panel
+                  </button>
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {availableTenants.map((tenant) => (
+                  <div
+                    key={tenant.id}
+                    className="rounded-xl border border-slate-200 p-4 flex flex-col justify-between hover:border-blue-300 transition bg-slate-50/40"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-extrabold text-sm text-[#0A1633] truncate">
+                          {tenant.name}
+                        </span>
+                        <span
+                          className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                            tenant.status === 'ACTIVE'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-rose-100 text-rose-800'
+                          }`}
+                        >
+                          {tenant.status}
+                        </span>
+                      </div>
+                      <div className="text-xs font-mono text-slate-500 mb-4">
+                        Store Slug: {tenant.slug}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowStoresModal(false);
+                          onOpenStore(tenant.slug);
+                        }}
+                        className="flex-1 py-2 px-3 rounded-lg bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-bold transition cursor-pointer"
+                      >
+                        Login to Store
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowStoresModal(false);
+                          onOpenOnboarding(tenant.slug);
+                        }}
+                        className="py-2 px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                      >
+                        Setup
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

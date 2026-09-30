@@ -28,7 +28,7 @@ export const UnknownStore404View: React.FC<UnknownStore404ViewProps> = ({
             HTTP 404 • Tenant Not Found
           </div>
           <span className="text-xs font-mono text-slate-400">
-            {cleanSlug}.mypos.com
+            {cleanSlug}
           </span>
         </div>
 
@@ -49,46 +49,37 @@ export const UnknownStore404View: React.FC<UnknownStore404ViewProps> = ({
             <Sparkles className="w-5 h-5 text-violet-400 shrink-0 mt-0.5" />
             <div className="text-xs text-slate-300 leading-relaxed">
               <p className="font-semibold text-white mb-1">
-                Subdomain <span className="font-mono text-violet-300">{cleanSlug}.mypos.com</span> is available!
+                Store identifier <span className="font-mono text-violet-300">{cleanSlug}</span> is available!
               </p>
-              Claim this dedicated store URL right now to launch an isolated Retail POS & Inventory terminal with its own custom PWA installer.
+              Claim this dedicated store workspace right now to launch an isolated Retail POS &amp; Inventory terminal with its own custom PWA installer.
             </div>
           </div>
         </div>
 
-        {/* High-visibility CTA Button required by spec */}
-        <a
-          href={`https://mypos.com#pricing?requestedSlug=${encodeURIComponent(cleanSlug)}`}
-          onClick={(e) => {
-            e.preventDefault();
-            onClaimSlug(cleanSlug);
-          }}
+        {/* High-visibility CTA Button */}
+        <button
+          type="button"
+          onClick={() => onClaimSlug(cleanSlug)}
           className="w-full inline-flex items-center justify-center gap-2.5 px-6 py-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm md:text-base shadow-lg shadow-violet-600/25 transition-all cursor-pointer"
         >
           <span>Create POS Account for '{cleanSlug}'</span>
           <ArrowRight className="w-4 h-4" />
-        </a>
-
-        <div className="mt-3 text-center">
-          <span className="text-[11px] font-mono text-slate-500">
-            Redirects to https://mypos.com#pricing?requestedSlug={cleanSlug}
-          </span>
-        </div>
+        </button>
 
         <div className="mt-8 pt-6 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
           <button
             type="button"
-            onClick={() => onSwitchToStore('mystore')}
-            className="inline-flex items-center gap-1.5 text-slate-300 hover:text-white transition-colors"
+            onClick={() => onClaimSlug('')}
+            className="inline-flex items-center gap-1.5 text-slate-300 hover:text-white transition-colors cursor-pointer"
           >
             <Globe className="w-3.5 h-3.5 text-violet-400" />
-            Visit Flagship Demo (mystore.mypos.com)
+            Back to Home
           </button>
 
           <button
             type="button"
             onClick={onGoToSuperAdmin}
-            className="inline-flex items-center gap-1.5 text-slate-300 hover:text-white transition-colors"
+            className="inline-flex items-center gap-1.5 text-slate-300 hover:text-white transition-colors cursor-pointer"
           >
             <ShieldAlert className="w-3.5 h-3.5 text-emerald-400" />
             Open SuperAdmin C-Panel

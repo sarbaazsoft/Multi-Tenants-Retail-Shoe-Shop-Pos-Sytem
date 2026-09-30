@@ -35,7 +35,6 @@ import {
   Keyboard,
   Calendar,
   Check,
-  Sparkles,
   Globe,
   Download,
   Trash2,
@@ -77,8 +76,8 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
 
   // Login / Reset form state when not authenticated as SUPERADMIN
   const [authTab, setAuthTab] = useState<'login' | 'forgot' | 'reset'>('login');
-  const [email, setEmail] = useState('superadmin@mypos.com');
-  const [password, setPassword] = useState('superadmin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [resetToken, setResetToken] = useState('');
@@ -252,8 +251,11 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
     setAuthInfo(null);
     try {
       const res = await api.auth.forgotPassword({ email });
-      setAuthInfo(`Password reset token generated: ${res.resetToken}`);
-      setResetToken(res.resetToken);
+      setResetToken('');
+      setAuthInfo(
+        res.message ||
+          'If the email exists in our system, a password reset verification token has been issued. Please enter your verification token below.'
+      );
       setAuthTab('reset');
     } catch (err: any) {
       setAuthError(err.message || 'Failed to request reset token.');
@@ -268,10 +270,12 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
     setAuthError(null);
     setAuthInfo(null);
     try {
-      await api.auth.resetPassword({ email, token: resetToken, newPassword });
+      await api.auth.resetPassword({ email, token: resetToken.trim(), newPassword });
       setAuthInfo('SuperAdmin password has been reset successfully! You can now sign in.');
+      setResetToken('');
+      setNewPassword('');
+      setPassword('');
       setAuthTab('login');
-      setPassword(newPassword);
     } catch (err: any) {
       setAuthError(err.message || 'Password reset failed.');
     } finally {
@@ -300,7 +304,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       const res = await api.superAdmin.toggleTenantStatus(store.id, nextStatus);
       setSuccessMessage(
         res.message ||
-          `Store '${store.name}' (${store.subdomain}) is now ${nextStatus}.`
+          `Store '${store.name}' is now ${nextStatus}.`
       );
       await loadOverview();
       onTenantsUpdated();
@@ -354,7 +358,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
     try {
       const res = await api.superAdmin.deleteTenant(targetStore.id);
       const msg =
-        res.message || `Store '${targetStore.name}' (${targetStore.subdomain}) has been permanently deleted.`;
+        res.message || `Store '${targetStore.name}' has been permanently deleted.`;
       setStores((prev) => prev.filter((s) => s.id !== targetStore.id));
       setStoreToDelete(null);
       setSuccessMessage(msg);
@@ -379,8 +383,8 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       setSuccessMessage(
         res.message ||
           ((reqItem as any).request_type === 'RENEWAL'
-            ? `Approved subscription renewal for '${reqItem.store_name}' (${reqItem.requested_slug}.mypos.com).`
-            : `Approved & provisioned store '${reqItem.store_name}' (${reqItem.requested_slug}.mypos.com).`)
+            ? `Approved subscription renewal for '${reqItem.store_name}'.`
+            : `Approved & provisioned store '${reqItem.store_name}'.`)
       );
       await loadOverview();
       onTenantsUpdated();
@@ -598,7 +602,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     MyPOS SaaS C-Panel
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-purple-200/80 mt-1 font-medium">
-                    Platform SuperAdmin Control Plane &bull; <span className="font-mono">mypos.com/admin</span>
+                    Platform SuperAdmin Control Plane
                   </p>
                 </div>
 
@@ -719,7 +723,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                           id="superadmin-email-input"
                           type="email"
                           required
-                          placeholder="superadmin@mypos.com"
+                          placeholder="Enter SuperAdmin email"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           className="app-input w-full bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-purple-800/60 focus:bg-white dark:focus:bg-slate-900 focus:border-purple-600 dark:focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 dark:focus:ring-purple-500/20 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-400 rounded-xl text-xs sm:text-sm font-medium py-2.5 pl-[2.125rem] pr-4 transition outline-none"
@@ -800,71 +804,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                         </>
                       )}
                     </button>
-
-                    {/* Quick SuperAdmin & Store Credentials Helper (Aligned with Store Auth Page) */}
-                    <div className="pt-3 border-t border-slate-200/80 dark:border-purple-900/50 space-y-2 text-[11px]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500 dark:text-purple-200/70 font-mono font-semibold">
-                          Quick C-Panel Login (mypos.com/admin):
-                        </span>
-                        <span className="text-[10px] text-slate-400 dark:text-purple-300/60 font-mono">
-                          1-Click Fill
-                        </span>
-                      </div>
-
-                      <button
-                        id="superadmin-quick-fill-btn"
-                        type="button"
-                        onClick={() => {
-                          setEmail('superadmin@mypos.com');
-                          setPassword('superadmin123');
-                          setAuthError(null);
-                        }}
-                        className="w-full px-3 py-2.5 rounded-xl bg-purple-50 hover:bg-purple-100/90 dark:bg-purple-900/40 dark:hover:bg-purple-800/60 border border-purple-200/80 dark:border-purple-700/60 text-left transition cursor-pointer group"
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-bold text-purple-800 dark:text-purple-200 text-[11px]">
-                            Platform SuperAdmin
-                          </span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-200/70 dark:bg-purple-800 text-purple-900 dark:text-purple-100 font-mono font-bold">
-                            SUPERADMIN
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-purple-700/80 dark:text-purple-300/80 font-mono mt-0.5">
-                          <span className="truncate">superadmin@mypos.com</span>
-                          <span>PIN: superadmin123</span>
-                        </div>
-                      </button>
-
-                      <div className="pt-1 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-500 dark:text-purple-300/70">
-                        <div className="flex items-center gap-1.5">
-                          <span>Switch to Store:</span>
-                          <button
-                            type="button"
-                            onClick={() => onOpenStore('tj-shoes')}
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-purple-900/50 text-slate-700 dark:text-purple-200 font-bold transition cursor-pointer"
-                          >
-                            tj-shoes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onOpenStore('mystore')}
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-purple-900/50 text-slate-700 dark:text-purple-200 font-bold transition cursor-pointer"
-                          >
-                            mystore
-                          </button>
-                        </div>
-                        <a
-                          href="/admin/manifest.webmanifest"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-purple-600 dark:text-purple-300 hover:underline inline-flex items-center gap-1"
-                        >
-                          <span>PWA Manifest</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                    </div>
                   </form>
                 )}
 
@@ -886,7 +825,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                         <input
                           type="email"
                           required
-                          placeholder="superadmin@mypos.com"
+                          placeholder="Enter SuperAdmin email"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           className="app-input w-full bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-purple-800/60 focus:bg-white dark:focus:bg-slate-900 focus:border-purple-600 dark:focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 dark:focus:ring-purple-500/20 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-400 rounded-xl text-xs sm:text-sm font-medium py-2.5 pl-[2.125rem] pr-4 transition outline-none"
@@ -1354,7 +1293,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     {currentUser?.name || 'Platform SuperAdmin'}
                   </div>
                   <div className="text-[10px] text-purple-600 dark:text-purple-300 font-mono font-semibold truncate">
-                    SUPERADMIN • mypos.com
+                    SUPERADMIN
                   </div>
                 </div>
               )}
@@ -1367,15 +1306,12 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
             )}
           </div>
 
-          {/* Dedicated SuperAdmin PWA Manifest Link */}
-          <a
-            href="/admin/manifest.webmanifest"
-            target="_blank"
-            rel="noreferrer"
-            className={`w-full flex items-center rounded-xl bg-indigo-50/60 hover:bg-indigo-100/80 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 transition cursor-pointer group shadow-xs ${
+          {/* Dedicated SuperAdmin PWA Badge */}
+          <div
+            className={`w-full flex items-center rounded-xl bg-indigo-50/60 dark:bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 transition shadow-xs ${
               collapsed ? 'justify-center p-2 relative' : 'justify-between px-2.5 py-1.5'
             }`}
-            title="Inspect Dedicated SuperAdmin PWA Manifest (/admin/manifest.webmanifest)"
+            title="Dedicated SuperAdmin PWA"
           >
             <div className="flex items-center gap-2">
               <FileCode2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
@@ -1383,10 +1319,10 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
             </div>
             {!collapsed && (
               <span className="text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded bg-white dark:bg-[#070B14] text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-                /admin/
+                PWA
               </span>
             )}
-          </a>
+          </div>
 
           {/* Theme Toggle & Database Connected Status */}
           <div className="space-y-1.5 pt-1">
@@ -1509,7 +1445,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
             <div className="flex items-center gap-2.5 min-w-0">
               <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-500/15 border border-purple-200 dark:border-purple-500/30 text-purple-700 dark:text-purple-300 text-xs font-mono font-bold">
                 <Shield className="w-3.5 h-3.5" />
-                mypos.com/admin
+                SuperAdmin
               </span>
               <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
                 {activeTab === 'dashboard' && 'SuperAdmin Executive Dashboard'}
@@ -1529,7 +1465,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search stores, subdomains (mystore.mypos.com), or owners..."
+                placeholder="Search stores, store slugs, or owners..."
                 className="w-full pl-9 pr-8 py-1.5 rounded-xl bg-slate-100/90 dark:bg-[#131B2E] border border-slate-200/90 dark:border-indigo-500/30 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-purple-500 transition"
               />
               {searchQuery && (
@@ -1690,7 +1626,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-base">
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                       <span>
-                        Store Provisioned: {provisionedBanner.storeName} ({provisionedBanner.subdomain})
+                        Store Provisioned: {provisionedBanner.storeName}
                       </span>
                     </div>
                     <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -1731,7 +1667,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                       className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition cursor-pointer"
                     >
                       <Wand2 className="w-4 h-4" />
-                      <span>Launch Onboarding (/app/{provisionedBanner.slug}/install)</span>
+                      <span>Launch Store Onboarding</span>
                     </button>
                     <button
                       type="button"
@@ -1846,7 +1782,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                       <span>Deployed Stores &amp; Real-Time Middleware Access Control</span>
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Toggling a store&apos;s status immediately revokes or restores access at the subdomain and JWT middleware level.
+                      Toggling a store&apos;s status immediately revokes or restores access at the tenant and JWT middleware level.
                     </p>
                   </div>
 
@@ -1877,7 +1813,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-200/80 dark:border-indigo-500/20 text-[11px] font-mono uppercase text-slate-500 dark:text-slate-400 bg-slate-50/80 dark:bg-[#0D1322]/60">
-                        <th className="py-3.5 px-5">Store / Subdomain</th>
+                        <th className="py-3.5 px-5">Store</th>
                         <th className="py-3.5 px-4">Owner &amp; Currency</th>
                         <th className="py-3.5 px-4">Subscription &amp; App Key</th>
                         <th className="py-3.5 px-4 text-right">Products</th>
@@ -1924,7 +1860,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                                       </span>
                                     </div>
                                     <div className="text-xs font-mono text-purple-600 dark:text-indigo-300 font-semibold">
-                                      {store.subdomain}
+                                      Slug: {store.slug}
                                     </div>
                                   </div>
                                 </div>
@@ -2111,10 +2047,22 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenOnboarding(store.slug)}
-                                    className="p-2 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-purple-700 dark:text-purple-300 border border-purple-200/80 dark:border-slate-700 transition-colors cursor-pointer"
-                                    title={`Open Initial Store Setup (/app/${store.slug}/install)`}
+                                    className={`p-2 rounded-xl transition-colors cursor-pointer border ${
+                                      store.onboardingCompleted
+                                        ? 'bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-700/60'
+                                        : 'bg-purple-50 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-purple-700 dark:text-purple-300 border-purple-200/80 dark:border-slate-700'
+                                    }`}
+                                    title={
+                                      store.onboardingCompleted
+                                        ? 'Initial Store Setup & POS Defaults Locked'
+                                        : 'Open Initial Store Setup'
+                                    }
                                   >
-                                    <Wand2 className="w-4 h-4" />
+                                    {store.onboardingCompleted ? (
+                                      <Lock className="w-4 h-4" />
+                                    ) : (
+                                      <Wand2 className="w-4 h-4" />
+                                    )}
                                   </button>
 
                                   {/* Open Store POS */}
@@ -2180,7 +2128,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     <thead>
                       <tr className="border-b border-slate-200/80 dark:border-indigo-500/20 text-[11px] font-mono uppercase text-slate-500 dark:text-slate-400 bg-slate-50/80 dark:bg-[#0D1322]/60">
                         <th className="py-3.5 px-5">Requested Store</th>
-                        <th className="py-3.5 px-4">Desired Subdomain</th>
+                        <th className="py-3.5 px-4">Store Slug</th>
                         <th className="py-3.5 px-4">Owner Details</th>
                         <th className="py-3.5 px-4">Plan</th>
                         <th className="py-3.5 px-4 text-center">Status</th>
@@ -2214,7 +2162,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                                 </div>
                               </td>
                               <td className="py-4 px-4 font-mono text-xs text-purple-600 dark:text-violet-300 font-semibold">
-                                {reqItem.requested_slug}.mypos.com
+                                {reqItem.requested_slug}
                               </td>
                               <td className="py-4 px-4">
                                 <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -2307,7 +2255,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-purple-700 dark:text-emerald-300 border border-purple-200/80 dark:border-slate-700 text-xs font-mono font-bold cursor-pointer"
                                     >
                                       <Store className="w-3.5 h-3.5" />
-                                      <span>Open /app/{reqItem.requested_slug}</span>
+                                      <span>Open Store</span>
                                     </button>
                                   )}
 
@@ -2345,16 +2293,10 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                       Each tenant store and the SuperAdmin Control Panel has an isolated Web App Manifest and scope.
                     </p>
                   </div>
-                  <a
-                    href="/admin/manifest.webmanifest"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-50 dark:bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-500/30 text-xs font-mono font-bold"
-                  >
+                  <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-50 dark:bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-500/30 text-xs font-mono font-bold">
                     <Globe className="w-3.5 h-3.5" />
-                    <span>/admin/manifest.webmanifest</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                    <span>SuperAdmin PWA</span>
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2375,7 +2317,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                             {st.name} — POS
                           </div>
                           <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
-                            start_url: /app/{st.slug}
+                            Slug: {st.slug}
                           </div>
                         </div>
                       </div>
@@ -2384,15 +2326,9 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                         <span className="text-slate-500 dark:text-slate-400">
                           theme: {st.themeColor || '#7C3AED'}
                         </span>
-                        <a
-                          href={st.manifestUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-purple-600 dark:text-purple-300 hover:underline inline-flex items-center gap-1 font-bold"
-                        >
-                          <span>Inspect JSON</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+                        <span className="text-purple-600 dark:text-purple-300 font-bold">
+                          Active PWA
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -2413,7 +2349,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
           >
             SarbaazSoft
           </a>{' '}
-          © 2026 • Control Plane: <span className="font-mono">mypos.com/admin</span>
+          © 2026 • Platform SuperAdmin Control Plane
         </footer>
       </div>
 
@@ -2487,7 +2423,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                   required
                   value={newOwnerEmail}
                   onChange={(e) => setNewOwnerEmail(e.target.value)}
-                  placeholder="owner@apex.mypos.com"
+                  placeholder="Enter owner email"
                   className="app-input w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm outline-none focus:border-purple-600"
                 />
               </div>
@@ -2519,7 +2455,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Subdomain Slug *
+                  Store Slug *
                 </label>
                 <div className="flex items-center rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 overflow-hidden">
                   <input
@@ -2538,9 +2474,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     placeholder="storename"
                     className="w-full px-3.5 py-2.5 bg-transparent text-slate-900 dark:text-white text-sm font-mono outline-none"
                   />
-                  <span className="px-3 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-mono border-l border-slate-200 dark:border-purple-800/60">
-                    .mypos.com
-                  </span>
                 </div>
               </div>
 
@@ -2617,7 +2550,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     Subscription &amp; App Key
                   </h3>
                   <p className="text-xs font-mono text-purple-600 dark:text-purple-300">
-                    {storeToEditSub.name} ({storeToEditSub.subdomain})
+                    {storeToEditSub.name}
                   </p>
                 </div>
               </div>
@@ -2803,7 +2736,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     Delete Store Tenant?
                   </h3>
                   <div className="text-xs font-mono text-rose-600 dark:text-rose-300">
-                    {storeToDelete.subdomain} (ID #{storeToDelete.id})
+                    {storeToDelete.name} (ID #{storeToDelete.id})
                   </div>
                 </div>
               </div>

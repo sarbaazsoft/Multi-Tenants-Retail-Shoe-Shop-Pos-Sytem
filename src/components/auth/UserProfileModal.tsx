@@ -491,7 +491,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-3 pt-2.5 border-t border-slate-200/80 dark:border-[#1A263D] flex items-center gap-1.5">
                   <ImageIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                   <span>
-                    Profile image is optional. If left blank, your stylized initials avatar will be displayed.
+                    Profile image is optional. If left blank, a default user icon will be displayed.
                   </span>
                 </p>
               </div>

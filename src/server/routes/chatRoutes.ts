@@ -57,7 +57,7 @@ router.post('/', async (req: Request, res: Response) => {
       if (settingsRes.rows.length > 0) {
         const row = settingsRes.rows[0];
         if (!storeName) {
-          storeName = row.name || row.company_name || 'TJ Shoes';
+          storeName = row.name || row.company_name || 'Retail Store';
         }
         pricingPolicy =
           String(row.pricing_mode || row.pricingPolicy || 'FIXED').toUpperCase() === 'NEGOTIABLE'
@@ -73,10 +73,10 @@ router.post('/', async (req: Request, res: Response) => {
         invoicePrefix = row.invoice_prefix || row.invoicePrefix || 'INV-';
         purchasePrefix = row.purchase_prefix || row.purchasePrefix || 'PUR-';
       } else {
-        if (!storeName) storeName = 'TJ Shoes';
+        if (!storeName) storeName = 'Retail Store';
       }
     } catch {
-      if (!storeName) storeName = 'TJ Shoes';
+      if (!storeName) storeName = 'Retail Store';
     }
 
     try {

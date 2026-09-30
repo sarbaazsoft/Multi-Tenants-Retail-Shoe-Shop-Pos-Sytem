@@ -12,8 +12,6 @@ import {
   Share2,
   PlusSquare,
   Sparkles,
-  ExternalLink,
-  Layers,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useScrollActiveTab } from '../../hooks/useScrollActiveTab.ts';
@@ -29,8 +27,8 @@ type PlatformTab = 'android' | 'apple' | 'desktop';
 export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClose, storeName }) => {
   const { isInstallable, isInstalled, isIOS, isAndroid, install } = usePWAInstall();
   const [activeTab, setActiveTab] = useState<PlatformTab>('android');
-  const effectiveStoreName = storeName || localStorage.getItem('cached_store_name') || 'TJ Shoes';
-  const pwaAppName = `${effectiveStoreName} By SarbaazSoft`;
+  const effectiveStoreName = storeName || localStorage.getItem('cached_store_name') || 'StepSync POS';
+  const pwaAppName = effectiveStoreName;
 
   const { containerRef: installTabContainerRef } = useScrollActiveTab<HTMLDivElement>(activeTab, {
     padding: 16,
@@ -55,38 +53,6 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   }, [isOpen, isAndroid, isIOS]);
 
   if (!isOpen) return null;
-
-  const handleDownloadApk = () => {
-    setDownloadingApk(true);
-    const link = document.createElement('a');
-    link.href = '/download/apk';
-    link.download = 'StepSync-POS.apk';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => {
-      setDownloadingApk(false);
-      setDownloadApkSuccess(true);
-      setTimeout(() => setDownloadApkSuccess(false), 5000);
-    }, 1000);
-  };
-
-  const handleDownloadExe = () => {
-    setDownloadingExe(true);
-    const link = document.createElement('a');
-    link.href = '/download/exe';
-    link.download = 'StepSync-POS-Desktop-Setup.exe';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => {
-      setDownloadingExe(false);
-      setDownloadSuccess(true);
-      setTimeout(() => setDownloadSuccess(false), 5000);
-    }, 1200);
-  };
 
   const handleInstallPWA = async () => {
     if (isInstallable) {
@@ -258,7 +224,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
 
               {/* Direct A tag download button - bypasses any browser synthetic click blockers */}
               <a
-                href="/download/apk"
+                href="/assets/StepSync-POS.apk"
                 download="StepSync-POS.apk"
                 onClick={() => {
                   setDownloadingApk(true);
@@ -482,7 +448,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
               </p>
 
               <a
-                href="/download/exe"
+                href="/assets/StepSync-POS-Desktop-Setup.exe"
                 download="StepSync-POS-Desktop-Setup.exe"
                 onClick={() => {
                   setDownloadingExe(true);

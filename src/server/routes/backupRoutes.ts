@@ -1,7 +1,5 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import fs from 'fs';
-import path from 'path';
 import { pgClient, dbInfo, isStandardPostgres } from '../../db/index.ts';
 import { ensureDatabaseSchema } from '../../db/schemaInit.ts';
 import { requireAuth, requireAdmin } from '../auth.ts';
@@ -353,82 +351,6 @@ router.post('/restore', requireAuth, requireAdmin, async (req: AuthenticatedRequ
   } catch (err: any) {
     console.error('Backup restore error:', err);
     res.status(500).json({ error: 'Failed to restore backup: ' + err.message });
-  }
-});
-
-// GET /api/backup/dummy-data-info - Metadata about the 5-Year Dummy Dataset
-router.get('/dummy-data-info', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
-  try {
-    const primaryPath = path.resolve(process.cwd(), 'data/dummy_data_five_years.sql');
-    const publicPath = path.resolve(process.cwd(), 'public/dummy_data_five_years.sql');
-    const sqlPath = fs.existsSync(primaryPath) ? primaryPath : publicPath;
-    const exists = fs.existsSync(sqlPath);
-    const stats = exists ? fs.statSync(sqlPath) : null;
-
-    res.json({
-      available: exists,
-      filename: 'dummy_data_five_years.sql',
-      downloadUrl: '/dummy_data_five_years.sql',
-      sizeBytes: stats?.size || 0,
-      sizeKb: stats ? Math.round(stats.size / 1024) : 0,
-      timeSpan: '5 Full Years (September 2021 – September 2026)',
-      highlights: {
-        salesCount: '1,250+ sales invoices',
-        purchasesCount: '85 supplier consignments',
-        productsCount: '115+ footwear models',
-        returnsCount: '35 customer returns',
-        purchaseReturnsCount: '15 supplier returns',
-        brandsCount: '18 footwear brands',
-        categoriesCount: '12 shoe categories',
-        customersCount: '60+ customer profiles',
-        suppliersCount: '12 wholesale distributors & tanneries',
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to read dummy data info: ' + err.message });
-  }
-});
-
-// POST /api/backup/load-dummy-data - 1-Click Load 5-Year Dummy Dataset
-router.post('/load-dummy-data', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
-  try {
-    const primaryPath = path.resolve(process.cwd(), 'data/dummy_data_five_years.sql');
-    const publicPath = path.resolve(process.cwd(), 'public/dummy_data_five_years.sql');
-    const sqlPath = fs.existsSync(primaryPath) ? primaryPath : publicPath;
-    if (!fs.existsSync(sqlPath)) {
-      return res.status(404).json({ error: 'Dummy data SQL file not found on server.' });
-    }
-
-    const sql = fs.readFileSync(sqlPath, 'utf-8');
-    await pgClient.waitReady;
-    await pgClient.exec(sql);
-    await ensureDatabaseSchema();
-
-    const salesCount = await pgClient.query('SELECT COUNT(*) as c FROM sales').catch(() => ({ rows: [{ c: '0' }] }));
-    const purCount = await pgClient.query('SELECT COUNT(*) as c FROM purchases').catch(() => ({ rows: [{ c: '0' }] }));
-    const prodCount = await pgClient.query('SELECT COUNT(*) as c FROM products').catch(() => ({ rows: [{ c: '0' }] }));
-    const retCount = await pgClient.query('SELECT COUNT(*) as c FROM returns').catch(() => ({ rows: [{ c: '0' }] }));
-    const custCount = await pgClient.query('SELECT COUNT(*) as c FROM customers').catch(() => ({ rows: [{ c: '0' }] }));
-    const brandCount = await pgClient.query('SELECT COUNT(DISTINCT brand) as c FROM products WHERE brand IS NOT NULL AND TRIM(brand) != \'\'').catch(() => ({ rows: [{ c: '0' }] }));
-    const catCount = await pgClient.query('SELECT COUNT(DISTINCT category) as c FROM products WHERE category IS NOT NULL AND TRIM(category) != \'\'').catch(() => ({ rows: [{ c: '0' }] }));
-
-    res.json({
-      success: true,
-      message: '5-Year Comprehensive Historical Dummy Data loaded successfully!',
-      counts: {
-        sales: parseInt(salesCount.rows[0]?.c || '0', 10),
-        purchases: parseInt(purCount.rows[0]?.c || '0', 10),
-        products: parseInt(prodCount.rows[0]?.c || '0', 10),
-        returns: parseInt(retCount.rows[0]?.c || '0', 10),
-        customers: parseInt(custCount.rows[0]?.c || '0', 10),
-        brands: parseInt(brandCount.rows[0]?.c || '0', 10),
-        categories: parseInt(catCount.rows[0]?.c || '0', 10),
-      },
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('Error loading dummy data in backup:', err);
-    res.status(500).json({ error: 'Failed to execute dummy data SQL: ' + err.message });
   }
 });
 

@@ -11,7 +11,6 @@ import {
   RefreshCw,
   ShieldCheck,
   HardDrive,
-  Calendar,
   ArrowDownToLine,
   Check,
   ShoppingBag,
@@ -75,16 +74,12 @@ export const DataBackupRestore: React.FC<DataBackupRestoreProps> = ({
   const [restoreSuccess, setRestoreSuccess] = useState<{ message: string; totalRestored: number; counts: Record<string, number> } | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
-  // Direct SQL Script Import & 1-Year Dummy Dataset State
+  // Direct SQL Script Import State
   const [isImportingSql, setIsImportingSql] = useState(false);
   const [selectedSqlFile, setSelectedSqlFile] = useState<File | null>(null);
   const [sqlFileContent, setSqlFileContent] = useState<string>('');
   const [sqlImportSuccess, setSqlImportSuccess] = useState<{ message: string; counts: Record<string, number> } | null>(null);
   const [sqlImportError, setSqlImportError] = useState<string | null>(null);
-
-  const [isLoadingDummy, setIsLoadingDummy] = useState(false);
-  const [dummyLoadSuccess, setDummyLoadSuccess] = useState<{ message: string; counts: Record<string, number> } | null>(null);
-  const [dummyLoadError, setDummyLoadError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sqlFileInputRef = useRef<HTMLInputElement>(null);
@@ -334,26 +329,6 @@ export const DataBackupRestore: React.FC<DataBackupRestoreProps> = ({
       setSqlImportError(err.message || 'Failed to execute SQL script.');
     } finally {
       setIsImportingSql(false);
-    }
-  };
-
-  const handleLoadOneYearDummyData = async () => {
-    setIsLoadingDummy(true);
-    setDummyLoadError(null);
-    setDummyLoadSuccess(null);
-
-    try {
-      const res = await api.backup.loadDummyData();
-      setDummyLoadSuccess(res);
-      loadStats();
-      if (onDataRestored) {
-        onDataRestored();
-      }
-    } catch (err: any) {
-      console.error('Dummy data load error:', err);
-      setDummyLoadError(err.message || 'Failed to load dummy dataset.');
-    } finally {
-      setIsLoadingDummy(false);
     }
   };
 
@@ -877,149 +852,82 @@ export const DataBackupRestore: React.FC<DataBackupRestoreProps> = ({
         </div>
       </div>
 
-      {/* Manual SQL Script Import & 1-Year Dummy Dataset Card */}
+      {/* Manual SQL Script Import Card */}
       <div className="p-6 rounded-2xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/50 dark:bg-[#070D1F] shadow-xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center justify-center font-bold shrink-0">
-              <FileText className="w-5 h-5" />
-            </div>
-            <div>
-              <h4 className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
-                <span>Direct .SQL Script Import &amp; 5-Year Enterprise Dataset</span>
-                <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-800/60">
-                  SQL File
-                </span>
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Execute raw PostgreSQL scripts or load 5 full years (2021–2026) of enterprise sales, purchases, and returns to analyze dashboard and report routes.
-              </p>
-            </div>
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center justify-center font-bold shrink-0">
+            <FileText className="w-5 h-5" />
           </div>
-
-          <a
-            href="/dummy_data_five_years.sql"
-            download="dummy_data_five_years.sql"
-            className="self-start sm:self-auto px-3.5 py-2 rounded-xl border border-slate-200 dark:border-purple-400/40 bg-white dark:bg-purple-500/20 hover:bg-slate-50 dark:hover:bg-purple-500/30 text-slate-700 dark:text-purple-200 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-500" />
-            <span>Download dummy_data_five_years.sql (500 KB)</span>
-          </a>
+          <div>
+            <h4 className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
+              <span>Direct .SQL Script Import</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-800/60">
+                SQL File
+              </span>
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Upload and execute custom PostgreSQL scripts to import records into your store database.
+            </p>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-1">
-          {/* Option A: 1-Click Load 5-Year Dummy Data */}
-          <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131B2E] space-y-3.5 shadow-2xs">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
-                <span>1-Click Load 5-Year Dataset (Server File)</span>
-              </span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
-                5 Years (2021–2026)
-              </span>
-            </div>
+        <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131B2E] space-y-3.5 shadow-2xs">
+          <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Upload className="w-4 h-4 text-slate-500" />
+            <span>Upload &amp; Execute Custom .SQL File</span>
+          </span>
 
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              Populates 1,250+ sales, 85 purchase consignments, 118 shoe models, 50 return audits, and 61 customer accounts covering 2021 to 2026.
+          <div
+            onClick={() => sqlFileInputRef.current?.click()}
+            className="p-3.5 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-400 transition text-center cursor-pointer space-y-1 bg-slate-50/50 dark:bg-slate-900"
+          >
+            <Upload className="w-5 h-5 text-blue-600 dark:text-blue-400 mx-auto" />
+            <div className="text-xs font-bold text-blue-600 dark:text-blue-400">
+              {selectedSqlFile ? selectedSqlFile.name : 'Select or drop .sql file'}
+            </div>
+            <p className="text-[10px] text-slate-400">
+              {selectedSqlFile
+                ? `${Math.round(selectedSqlFile.size / 1024)} KB ready to execute`
+                : 'Click to select SQL file from your computer'}
             </p>
-
-            <button
-              type="button"
-              onClick={handleLoadOneYearDummyData}
-              disabled={isLoadingDummy}
-              className="w-full h-11 px-4 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-700 hover:via-indigo-700 hover:to-purple-800 text-white border border-purple-400/40 dark:border-purple-400/50 font-bold text-xs shadow-md shadow-purple-600/25 dark:shadow-[0_0_14px_rgba(147,51,234,0.3)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-95"
-            >
-              {isLoadingDummy ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <HardDrive className="w-4 h-4" />
-              )}
-              <span>{isLoadingDummy ? 'Loading 5-Year Dataset...' : '⚡ 1-Click Load 5-Year Dataset'}</span>
-            </button>
-
-            {dummyLoadSuccess && (
-              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 text-xs space-y-1 animate-in fade-in">
-                <div className="flex items-center gap-1.5 font-bold">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{dummyLoadSuccess.message}</span>
-                </div>
-                <div className="flex flex-wrap gap-2 text-[10px] text-emerald-700 dark:text-emerald-400 pt-0.5 font-medium">
-                  <span>Sales: {dummyLoadSuccess.counts.sales || 0}</span>
-                  <span>Purchases: {dummyLoadSuccess.counts.purchases || 0}</span>
-                  <span>Products: {dummyLoadSuccess.counts.products || 0}</span>
-                  <span>Returns: {dummyLoadSuccess.counts.returns || 0}</span>
-                </div>
-              </div>
-            )}
-
-            {dummyLoadError && (
-              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                <span>{dummyLoadError}</span>
-              </div>
-            )}
+            <input
+              ref={sqlFileInputRef}
+              type="file"
+              accept=".sql"
+              onChange={handleSqlFileSelect}
+              className="hidden"
+            />
           </div>
 
-          {/* Option B: Manual .SQL File Upload */}
-          <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131B2E] space-y-3.5 shadow-2xs">
-            <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Upload className="w-4 h-4 text-slate-500" />
-              <span>Upload &amp; Execute Custom .SQL File</span>
-            </span>
+          <button
+            type="button"
+            onClick={handleExecuteManualSql}
+            disabled={isImportingSql || !selectedSqlFile}
+            className="w-full h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold text-xs shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isImportingSql ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <FileCheck className="w-4 h-4" />
+            )}
+            <span>{isImportingSql ? 'Executing SQL...' : 'Import & Execute Script'}</span>
+          </button>
 
-            <div
-              onClick={() => sqlFileInputRef.current?.click()}
-              className="p-3.5 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-400 transition text-center cursor-pointer space-y-1 bg-slate-50/50 dark:bg-slate-900"
-            >
-              <Upload className="w-5 h-5 text-blue-600 dark:text-blue-400 mx-auto" />
-              <div className="text-xs font-bold text-blue-600 dark:text-blue-400">
-                {selectedSqlFile ? selectedSqlFile.name : 'Select or drop .sql file'}
+          {sqlImportSuccess && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 text-xs space-y-1 animate-in fade-in">
+              <div className="flex items-center gap-1.5 font-bold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{sqlImportSuccess.message}</span>
               </div>
-              <p className="text-[10px] text-slate-400">
-                {selectedSqlFile
-                  ? `${Math.round(selectedSqlFile.size / 1024)} KB ready to execute`
-                  : 'Click to select SQL file from your computer'}
-              </p>
-              <input
-                ref={sqlFileInputRef}
-                type="file"
-                accept=".sql"
-                onChange={handleSqlFileSelect}
-                className="hidden"
-              />
             </div>
+          )}
 
-            <button
-              type="button"
-              onClick={handleExecuteManualSql}
-              disabled={isImportingSql || !selectedSqlFile}
-              className="w-full h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold text-xs shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {isImportingSql ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <FileCheck className="w-4 h-4" />
-              )}
-              <span>{isImportingSql ? 'Executing SQL...' : 'Import & Execute Script'}</span>
-            </button>
-
-            {sqlImportSuccess && (
-              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 text-xs space-y-1 animate-in fade-in">
-                <div className="flex items-center gap-1.5 font-bold">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{sqlImportSuccess.message}</span>
-                </div>
-              </div>
-            )}
-
-            {sqlImportError && (
-              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                <span>{sqlImportError}</span>
-              </div>
-            )}
-          </div>
+          {sqlImportError && (
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+              <span>{sqlImportError}</span>
+            </div>
+          )}
         </div>
       </div>
 
