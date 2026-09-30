@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b" />
+      <stop offset="50%" stop-color="#312e81" />
+      <stop offset="100%" stop-color="#3f51b5" />
+    </linearGradient>
+    <linearGradient id="shoeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#e0e7ff" />
+    </linearGradient>
+    <linearGradient id="soleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#090e1a" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded canvas -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Outer subtle circular badge accent -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="#6366f1" stroke-width="4" stroke-opacity="0.3" stroke-dasharray="12 8" />
+
+  <!-- Sneaker / Footwear Icon in Safe Zone -->
+  <g filter="url(#shadow)" transform="translate(256,240)">
+    <!-- Shoe Upper Body -->
+    <path d="M -130,40 C -130,10 -115,-40 -80,-65 C -65,-75 -35,-85 0,-50 C 30,-20 80,-15 110,-5 C 135,5 145,25 145,45 L 140,55 C 100,55 -10,55 -130,55 Z" fill="url(#shoeGrad)" />
+    
+    <!-- Shoe Ankle Collar & Lace details -->
+    <path d="M -80,-65 C -70,-85 -45,-90 -20,-85 C 0,-80 10,-60 5,-40 C 0,-25 -15,-20 -35,-25 Z" fill="#c7d2fe" />
+    <path d="M -25,-45 L 5,-25" stroke="#4f46e5" stroke-width="5" stroke-linecap="round" />
+    <path d="M -10,-30 L 20,-10" stroke="#4f46e5" stroke-width="5" stroke-linecap="round" />
+    <path d="M 5,-15 L 35,5" stroke="#4f46e5" stroke-width="5" stroke-linecap="round" />
+
+    <!-- Shoe Swoosh / Dynamic Wave Accent -->
+    <path d="M -100,20 Q 0,0 80,-2 Q 20,25 -80,30 Z" fill="#4f46e5" opacity="0.9" />
+
+    <!-- Cushioned Outsole / Tread -->
+    <path d="M -135,55 C -135,75 -115,85 -85,85 L 115,85 C 140,85 150,75 150,55 Z" fill="url(#soleGrad)" />
+
+    <!-- Modern Tread Grooves -->
+    <line x1="-90" y1="85" x2="-80" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="-50" y1="85" x2="-40" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="-10" y1="85" x2="0" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="30" y1="85" x2="40" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="70" y1="85" x2="80" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="110" y1="85" x2="120" y2="70" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+
+    <!-- Subtle Barcode / POS tag icon badge -->
+    <g transform="translate(100,-70)">
+      <rect x="-24" y="-18" width="48" height="36" rx="6" fill="#10b981" />
+      <line x1="-16" y1="-8" x2="-16" y2="8" stroke="#ffffff" stroke-width="3" />
+      <line x1="-10" y1="-8" x2="-10" y2="8" stroke="#ffffff" stroke-width="2" />
+      <line x1="-4" y1="-8" x2="-4" y2="8" stroke="#ffffff" stroke-width="4" />
+      <line x1="4" y1="-8" x2="4" y2="8" stroke="#ffffff" stroke-width="2" />
+      <line x1="10" y1="-8" x2="10" y2="8" stroke="#ffffff" stroke-width="3" />
+      <line x1="16" y1="-8" x2="16" y2="8" stroke="#ffffff" stroke-width="2" />
+    </g>
+  </g>
+
+  <!-- App Title Banner / Footwear POS text -->
+  <text x="256" y="425" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="34" font-weight="800" fill="#ffffff" letter-spacing="4">SHOE POS</text>
+  <text x="256" y="455" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#a5b4fc" letter-spacing="3">RETAIL &amp; INVENTORY</text>
+</svg>

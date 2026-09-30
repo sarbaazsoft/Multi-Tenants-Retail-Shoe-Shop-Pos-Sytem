@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Shoe-POS-Retail-Simple</title>
+    <meta name="description" content="Retail Shoe POS & Inventory terminal with PWA support, desktop launcher, barcode scanning, and multi-user management" />
+    <meta property="og:title" content="Shoe-POS-Retail-Simple" />
+    <meta property="og:description" content="Retail Shoe POS & Inventory terminal with PWA support, desktop launcher, barcode scanning, and multi-user management" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Suppress benign WebSocket/HMR connection notices in sandboxed preview iframe where HMR is disabled -->
+    <script>
+      (function () {
+        const isViteNotice = function (arg) {
+          if (!arg) return false;
+          const str = typeof arg === 'string' ? arg : (arg.message || String(arg));
+          return str.includes('[vite]') || str.includes('WebSocket') || str.includes('websocket');
+        };
+
+        const originalError = console.error;
+        console.error = function (...args) {
+          if (args.some(isViteNotice)) return;
+          originalError.apply(console, args);
+        };
+
+        const originalWarn = console.warn;
+        console.warn = function (...args) {
+          if (args.some(isViteNotice)) return;
+          originalWarn.apply(console, args);
+        };
+
+        window.addEventListener('error', function (e) {
+          if (isViteNotice(e.message) || (e.error && isViteNotice(e.error.message))) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function (e) {
+          if (isViteNotice(e.reason)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+
+        // Safe in-frame toast fallback for alert() to avoid sandboxed iframe errors
+        window.alert = function (message) {
+          console.log('[App Notice]:', message);
+          try {
+            const toast = document.createElement('div');
+            toast.style.position = 'fixed';
+            toast.style.bottom = '24px';
+            toast.style.left = '50%';
+            toast.style.transform = 'translateX(-50%)';
+            toast.style.backgroundColor = '#1e293b';
+            toast.style.color = '#ffffff';
+            toast.style.padding = '12px 20px';
+            toast.style.borderRadius = '10px';
+            toast.style.boxShadow = '0 10px 25px rgba(0,0,0,0.3)';
+            toast.style.zIndex = '99999';
+            toast.style.maxWidth = '90vw';
+            toast.style.fontSize = '14px';
+            toast.style.whiteSpace = 'pre-wrap';
+            toast.style.border = '1px solid #334155';
+            toast.textContent = String(message);
+            document.body.appendChild(toast);
+            setTimeout(function () {
+              if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+              }
+            }, 4500);
+          } catch (_) {}
+        };
+      })();
+    </script>
+
+    <!-- PWA & Mobile Meta Tags (Android & Apple iOS) -->
+    <meta name="theme-color" content="#2563EB" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TJ Shoes By SarbaazSoft" />
+    <meta name="application-name" content="TJ Shoes By SarbaazSoft" />
+    <meta name="msapplication-TileColor" content="#2563EB" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Web App Manifest Link -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+
+    <!-- Ensure stale Service Workers in preview iframes never strip proxy cookies or cause 403 on /api requests -->
+    <script>
+      (function () {
+        try {
+          if ('serviceWorker' in navigator && window.location.hostname.endsWith('.run.app')) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              var hadActive = false;
+              regs.forEach(function (reg) {
+                hadActive = true;
+                reg.unregister().catch(function () {});
+              });
+              if (window.caches && window.caches.keys) {
+                window.caches.keys().then(function (keys) {
+                  keys.forEach(function (k) {
+                    window.caches.delete(k).catch(function () {});
+                  });
+                });
+              }
+              if (hadActive && navigator.serviceWorker.controller && !sessionStorage.getItem('__sw_cleaned_v2')) {
+                sessionStorage.setItem('__sw_cleaned_v2', '1');
+                window.location.reload();
+              }
+            }).catch(function () {});
+          }
+        } catch (_) {}
+      })();
+    </script>
+
+    <!-- App Icons (Desktop, Android, and Apple Touch Icons) -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512x512.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/pwa-192x192.png" />
+    <link rel="apple-touch-icon" sizes="167x167" href="/pwa-192x192.png" />
+
+    <!-- Initialize Theme before React renders to prevent flash of wrong theme -->
+    <script>
+      (function () {
+        try {
+          const stored = localStorage.getItem('pos_theme');
+          let isDark = false;
+          if (stored === 'dark') {
+            isDark = true;
+          } else if (stored === 'system') {
+            isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          } else if (stored === 'light') {
+            isDark = false;
+          } else {
+            // default to light
+            isDark = false;
+          }
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.classList.remove('light');
+            document.documentElement.style.colorScheme = 'dark';
+            document.documentElement.setAttribute('data-theme', 'dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.classList.add('light');
+            document.documentElement.style.colorScheme = 'light';
+            document.documentElement.setAttribute('data-theme', 'light');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Intercept beforeinstallprompt immediately to suppress automatic browser banners -->
+    <script>
+      window.__deferredPwaPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__deferredPwaPrompt = e;
+        window.dispatchEvent(new CustomEvent('pwa-prompt-captured'));
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

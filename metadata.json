@@ -1,0 +1,8 @@
+{
+  "name": "Shoe-POS-Retail-Simple",
+  "description": "Retail Shoe POS & Inventory terminal with PWA support, desktop launcher, barcode scanning, and multi-user management",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
