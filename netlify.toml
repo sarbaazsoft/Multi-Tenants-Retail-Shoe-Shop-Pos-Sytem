@@ -1,0 +1,37 @@
+[build]
+  command = "npm run build:netlify"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["pg", "@electric-sql/pglite", "bcryptjs", "jsonwebtoken"]
+
+# Route all /api/* requests to the Express serverless function
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200
+  force = true
+
+# Route dynamic manifest and service worker endpoints to Express function
+[[redirects]]
+  from = "/admin/manifest.webmanifest"
+  to = "/.netlify/functions/api/admin/manifest.webmanifest"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/sw.js"
+  to = "/.netlify/functions/api/sw.js"
+  status = 200
+  force = true
+
+# React SPA Fallback (/admin, /install, /login, /app, etc.)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

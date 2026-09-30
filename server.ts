@@ -36,7 +36,7 @@ import tenantSaasRoutes from './src/server/routes/tenantSaasRoutes.ts';
 const rootDir = path.resolve('.');
 
 export const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 
 // Increase body size limit for JSON and URL-encoded payloads (e.g., base64 images & CSV imports)
 app.use(express.json({ limit: '50mb', strict: false }));
@@ -207,6 +207,12 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.NETLIFY ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME
+);
+
 async function startServer() {
   try {
     await pgClient.waitReady;
@@ -216,13 +222,13 @@ async function startServer() {
     console.error('Failed to initialize PostgreSQL database:', error);
   }
 
-  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  if (process.env.NODE_ENV !== 'production' && !isServerless) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!isServerless) {
     const distPath = path.join(rootDir, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
@@ -230,14 +236,14 @@ async function startServer() {
     });
   }
 
-  if (!process.env.VERCEL) {
+  if (!isServerless) {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 MyPOS Multi-Tenant SaaS Server running on http://localhost:${PORT}`);
     });
   }
 }
 
-if (!process.env.VERCEL) {
+if (!isServerless) {
   startServer();
 }
 
