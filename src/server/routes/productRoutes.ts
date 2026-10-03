@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin } from '../auth.ts';
 import type { AuthenticatedRequest } from '../auth.ts';
 import { extractStrictTenantId } from '../../db/tenantDb.ts';
 import {
+  generateCode128Barcode,
   generateEan13Barcode,
   validateBarcodePrefix,
   sanitizePrefix,
@@ -16,41 +17,136 @@ import {
   generateSuggestedArticle,
   generateSku,
   buildSkuInfo,
+  normalizeFootwearCategory,
 } from '../../utils/sku.ts';
 import { analyzeProductImageWithGemini } from '../gemini.ts';
 import { validateAndNormalizeProductPricing } from '../../schemas/productSchema.ts';
 
 const router = Router();
 
-// Helper to get next auto-incrementing, non-reusable product ID from PostgreSQL
-export async function getNextProductId(): Promise<number> {
-  let seqNext = 1;
+// Helper to get next per-store product number (1..99999):
+// 1. First checks company_settings.deleted_product_ids array for this tenant (recycles deleted numbers first).
+// 2. If deleted_product_ids is empty, uses COUNT(*) + 1 (or first available gap if legacy gap exists) for this tenant.
+export async function getNextProductId(tenantId: number = 1): Promise<number> {
   try {
-    const seqRes = await pgClient.query<{ last_value: string; is_called: boolean }>(
-      'SELECT last_value, is_called FROM products_id_seq'
-    );
-    if (seqRes.rows.length > 0) {
-      const last = parseInt(seqRes.rows[0].last_value, 10);
-      seqNext = seqRes.rows[0].is_called ? last + 1 : last;
-    }
-  } catch (_) {}
+    await ensureProductAndSettingsColumns();
 
-  const maxRes = await pgClient.query<{ max_id: string }>(
-    'SELECT COALESCE(MAX(id), 0) + 1 AS max_id FROM products'
-  );
-  const maxId = parseInt(maxRes.rows[0]?.max_id || '1', 10);
-  return Math.max(seqNext, maxId);
+    // 1. Check recycled deleted_product_ids array in company_settings for this store
+    const settingsRes = await pgClient.query<{ deleted_product_ids: number[] | null }>(
+      'SELECT deleted_product_ids FROM company_settings WHERE COALESCE(tenant_id, 1) = $1 LIMIT 1',
+      [tenantId]
+    );
+    const rawDeleted = settingsRes.rows[0]?.deleted_product_ids;
+    if (Array.isArray(rawDeleted) && rawDeleted.length > 0) {
+      const sortedCandidates = [...new Set(rawDeleted.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1))].sort(
+        (a, b) => a - b
+      );
+      if (sortedCandidates.length > 0) {
+        // Verify which candidates are genuinely free in this store
+        const occupiedRes = await pgClient.query<{ tenant_product_no: number }>(
+          'SELECT tenant_product_no FROM products WHERE COALESCE(tenant_id, 1) = $1 AND tenant_product_no = ANY($2::int[])',
+          [tenantId, sortedCandidates]
+        );
+        const occupiedSet = new Set(occupiedRes.rows.map((r) => Number(r.tenant_product_no)));
+        const validFree = sortedCandidates.filter((n) => !occupiedSet.has(n));
+
+        if (validFree.length !== rawDeleted.length) {
+          // Clean up stale occupied entries from deleted_product_ids
+          await pgClient.query(
+            'UPDATE company_settings SET deleted_product_ids = $1::int[] WHERE COALESCE(tenant_id, 1) = $2',
+            [validFree, tenantId]
+          );
+        }
+
+        if (validFree.length > 0) {
+          return validFree[0];
+        }
+      }
+    }
+
+    // 2. When deleted_product_ids is empty, check store product count & max
+    const statsRes = await pgClient.query<{ cnt: number; max_no: number }>(
+      `SELECT COUNT(*)::int AS cnt,
+              COALESCE(MAX(tenant_product_no), 0)::int AS max_no
+       FROM products
+       WHERE COALESCE(tenant_id, 1) = $1`,
+      [tenantId]
+    );
+    const cnt = Number(statsRes.rows[0]?.cnt || 0);
+    const maxNo = Number(statsRes.rows[0]?.max_no || 0);
+
+    // Fast path: No gaps (or empty store) -> COUNT(*) + 1
+    if (cnt === 0) return 1;
+    if (cnt === maxNo) return cnt + 1;
+
+    // Fallback if any legacy gap exists before deleted_product_ids tracking: find first missing number in index
+    const gapRes = await pgClient.query<{ next_no: number }>(
+      `SELECT COALESCE(
+        CASE WHEN NOT EXISTS (
+          SELECT 1 FROM products WHERE COALESCE(tenant_id, 1) = $1 AND tenant_product_no = 1
+        ) THEN 1 END,
+        (SELECT p1.tenant_product_no + 1
+         FROM products p1
+         LEFT JOIN products p2
+           ON COALESCE(p2.tenant_id, 1) = COALESCE(p1.tenant_id, 1)
+          AND p2.tenant_product_no = p1.tenant_product_no + 1
+         WHERE COALESCE(p1.tenant_id, 1) = $1
+           AND p1.tenant_product_no IS NOT NULL
+           AND p2.id IS NULL
+         ORDER BY p1.tenant_product_no ASC
+         LIMIT 1),
+        $2::int
+      ) AS next_no`,
+      [tenantId, Math.max(cnt, maxNo) + 1]
+    );
+    return Number(gapRes.rows[0]?.next_no || cnt + 1);
+  } catch (_) {
+    const fallbackRes = await pgClient.query<{ cnt: string }>(
+      'SELECT (COUNT(*) + 1)::text AS cnt FROM products WHERE COALESCE(tenant_id, 1) = $1',
+      [tenantId]
+    );
+    return parseInt(fallbackRes.rows[0]?.cnt || '1', 10);
+  }
+}
+
+// Removes a recycled product number from company_settings.deleted_product_ids once consumed
+async function consumeDeletedProductNo(tenantId: number, usedNo: number): Promise<void> {
+  if (!usedNo || usedNo < 1) return;
+  try {
+    await pgClient.query(
+      `UPDATE company_settings
+       SET deleted_product_ids = array_remove(COALESCE(deleted_product_ids, '{}'), $1::int)
+       WHERE COALESCE(tenant_id, 1) = $2`,
+      [usedNo, tenantId]
+    );
+  } catch (_) {}
+}
+
+// Saves a deleted product's number into company_settings.deleted_product_ids for reuse
+async function recordDeletedProductNo(tenantId: number, deletedNo: number): Promise<void> {
+  if (!deletedNo || deletedNo < 1) return;
+  try {
+    await pgClient.query(
+      `UPDATE company_settings
+       SET deleted_product_ids = (
+         SELECT COALESCE(array_agg(DISTINCT x ORDER BY x ASC), '{}')
+         FROM unnest(array_append(COALESCE(deleted_product_ids, '{}'), $1::int)) AS x
+         WHERE x >= 1
+       )
+       WHERE COALESCE(tenant_id, 1) = $2`,
+      [deletedNo, tenantId]
+    );
+  } catch (_) {}
 }
 
 /**
- * Generates official 13-digit EAN-13 barcode:
- * Format: [7-digit prefix from Settings] + [5-digit Product ID] + [1 Check Digit]
- * Total: 13 digits.
- * No colors, sizes, or variants.
+ * Generates short store Code-128 barcode (no barcode prefix, no zero-padding):
+ * Format: [2-Letter Category Code]-[Exact Store Product ID] (e.g. SN-9, BO-7, TD-12, CA-129)
  */
 export async function generateProductEan13(
   productId?: number | string,
-  tenantId: number = 1
+  tenantId: number = 1,
+  categoryHint?: string
 ): Promise<{
   barcode: string;
   prefix: string;
@@ -58,54 +154,41 @@ export async function generateProductEan13(
   checkDigit: number;
   formula: string;
 }> {
-  // 1. Get prefix from company_settings (strictly 7 numeric digits)
-  const settingsRes = await pgClient.query<{ barcode_prefix: string }>(
-    'SELECT barcode_prefix FROM company_settings WHERE COALESCE(tenant_id, 1) = $1 LIMIT 1',
-    [tenantId]
-  );
-  const rawPrefix = settingsRes.rows[0]?.barcode_prefix || '0108923';
-  const prefixValidation = validateBarcodePrefix(rawPrefix);
-  if (!prefixValidation.isValid) {
-    throw new Error(prefixValidation.error || 'Barcode prefix must be exactly 7 numeric digits. Please configure in Settings.');
-  }
-  const prefix = sanitizePrefix(rawPrefix);
-
-  // 2. Determine Product ID
+  // 1. Determine Per-Store Product ID (recycled deleted ID first, else store COUNT(*) + 1)
   let targetProductId = productId ? parseInt(String(productId).replace(/\D/g, ''), 10) : 0;
-  if (!targetProductId || isNaN(targetProductId)) {
-    targetProductId = await getNextProductId();
+  if (!targetProductId || isNaN(targetProductId) || targetProductId < 1) {
+    targetProductId = await getNextProductId(tenantId);
   }
 
-  // 3. Enforce 5-digit limit (1 to 99999)
-  if (targetProductId > 99999) {
-    throw new Error(`Product ID #${targetProductId} exceeds 99,999 limit for 5-digit barcode format.`);
-  }
-
-  // 4. Generate standard 13-digit barcode, guaranteeing no collision with existing products in this tenant
-  let candidate = generateEan13Barcode(prefix, targetProductId);
+  // 2. Generate short Code-128 barcode, guaranteeing no collision with existing products in this store
+  let candidate = generateCode128Barcode(targetProductId, categoryHint || 'CA');
   let attempts = 0;
   while (attempts < 1000) {
-    const existing = await pgClient.query('SELECT id FROM products WHERE barcode = $1 AND COALESCE(tenant_id, 1) = $2', [candidate.barcode, tenantId]);
+    const existing = await pgClient.query(
+      'SELECT id FROM products WHERE LOWER(barcode) = LOWER($1) AND COALESCE(tenant_id, 1) = $2',
+      [candidate.barcode, tenantId]
+    );
     if (existing.rows.length === 0) {
       return candidate;
     }
     targetProductId++;
-    if (targetProductId > 99999) {
-      throw new Error('Product barcode range exceeded 99,999.');
-    }
-    candidate = generateEan13Barcode(prefix, targetProductId);
+    candidate = generateCode128Barcode(targetProductId, categoryHint || 'CA');
     attempts++;
   }
   return candidate;
 }
 
 // Backward compatibility alias
-export async function generateNumericBarcode(productId?: number | string, tenantId: number = 1): Promise<string> {
-  const res = await generateProductEan13(productId, tenantId);
+export async function generateNumericBarcode(
+  productId?: number | string,
+  tenantId: number = 1,
+  categoryHint?: string
+): Promise<string> {
+  const res = await generateProductEan13(productId, tenantId, categoryHint);
   return res.barcode;
 }
 
-// Generate new unique EAN-13 barcode API (supports both GET and POST)
+// Generate new unique Code-128 store barcode API (supports both GET and POST)
 const handleGenerateBarcode = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = extractStrictTenantId(req);
@@ -114,9 +197,14 @@ const handleGenerateBarcode = async (req: AuthenticatedRequest, res: Response) =
       (typeof req.body === 'number' || typeof req.body === 'string'
         ? req.body
         : req.body?.productId ?? req.body?.value);
+    const rawCategory =
+      (req.query?.category as string | undefined) ||
+      (req.body && typeof req.body === 'object' ? req.body.category : undefined) ||
+      'CA';
     const result = await generateProductEan13(
       rawProductId !== undefined && rawProductId !== null && rawProductId !== '' ? String(rawProductId) : undefined,
-      tenantId
+      tenantId,
+      String(rawCategory)
     );
     res.json(result);
   } catch (err: any) {
@@ -126,10 +214,11 @@ const handleGenerateBarcode = async (req: AuthenticatedRequest, res: Response) =
 router.get('/generate-barcode', requireAuth, handleGenerateBarcode);
 router.post('/generate-barcode', requireAuth, handleGenerateBarcode);
 
-// Get next auto-incrementing, non-reusable product ID API
-router.get('/next-id', requireAuth, async (_req: AuthenticatedRequest, res: Response) => {
+// Get next per-store product ID (recycled deleted ID or COUNT(*) + 1)
+router.get('/next-id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const nextProductId = await getNextProductId();
+    const tenantId = extractStrictTenantId(req);
+    const nextProductId = await getNextProductId(tenantId);
     res.json({ nextProductId });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to retrieve next product ID: ' + err.message });
@@ -140,6 +229,7 @@ router.get('/next-id', requireAuth, async (_req: AuthenticatedRequest, res: Resp
 // Query params: ?brand=Nike&category=Shoes&article=SH-0001&productId=1
 router.get('/suggest-sku', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const tenantId = extractStrictTenantId(req);
     const { brand, brandId, brandName, category, categoryId, categoryName, article, productId } = req.query;
 
     const targetBrandName = String(brand || brandName || brandId || '').trim();
@@ -147,7 +237,7 @@ router.get('/suggest-sku', requireAuth, async (req: AuthenticatedRequest, res: R
 
     let targetProductId = productId ? parseInt(String(productId).replace(/\D/g, ''), 10) : 0;
     if (!targetProductId || isNaN(targetProductId)) {
-      targetProductId = await getNextProductId();
+      targetProductId = await getNextProductId(tenantId);
     }
 
     const skuInfo = buildSkuInfo(
@@ -179,10 +269,7 @@ const handleValidateBarcode = async (req: AuthenticatedRequest, res: Response) =
       });
     }
 
-    const prefixRes = await pgClient.query<any>('SELECT barcode_prefix FROM company_settings WHERE COALESCE(tenant_id, 1) = $1 LIMIT 1', [tenantId]);
-    const prefix = prefixRes.rows[0]?.barcode_prefix || '0108923';
-
-    const analysis = analyzeBarcode(rawBarcode, prefix);
+    const analysis = analyzeBarcode(rawBarcode);
 
     if (!analysis.isValid) {
       return res.json({
@@ -197,9 +284,9 @@ const handleValidateBarcode = async (req: AuthenticatedRequest, res: Response) =
       });
     }
 
-    // Check duplicate in database for this tenant
+    // Check duplicate in database strictly under this store (tenant_id)
     const duplicateRes = await pgClient.query<any>(
-      'SELECT id, name, sku, article FROM products WHERE barcode = $1 AND COALESCE(tenant_id, 1) = $2 AND ($3::int IS NULL OR id != $3)',
+      'SELECT id, tenant_product_no, name, sku, article FROM products WHERE LOWER(TRIM(barcode)) = LOWER(TRIM($1)) AND COALESCE(tenant_id, 1) = $2 AND ($3::int IS NULL OR id != $3) LIMIT 1',
       [rawBarcode, tenantId, excludeId]
     );
 
@@ -212,11 +299,12 @@ const handleValidateBarcode = async (req: AuthenticatedRequest, res: Response) =
         standardLabel: analysis.standardLabel,
         existingProduct: {
           id: existing.id,
+          tenantProductNo: existing.tenant_product_no || existing.id,
           name: existing.name,
           sku: existing.sku,
           article: existing.article,
         },
-        error: `Barcode is already in use by product: "${existing.name}" (${existing.sku})`,
+        error: `Barcode is already in use in this store by product: "${existing.name}" (${existing.sku})`,
       });
     }
 
@@ -226,7 +314,7 @@ const handleValidateBarcode = async (req: AuthenticatedRequest, res: Response) =
       standard: analysis.standard,
       standardLabel: analysis.standardLabel,
       suggestedFix: analysis.suggestedFix,
-      message: `Valid ${analysis.standardLabel} and available for use.`,
+      message: `Valid ${analysis.standardLabel} and available in this store.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to validate barcode: ' + err.message });
@@ -234,6 +322,89 @@ const handleValidateBarcode = async (req: AuthenticatedRequest, res: Response) =
 };
 router.get('/validate-barcode', requireAuth, handleValidateBarcode);
 router.post('/validate-barcode', requireAuth, handleValidateBarcode);
+
+// Real-time Article & SKU Uniqueness Validation API (supports both GET and POST)
+const handleValidateArticleAndSku = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await ensureProductAndSettingsColumns();
+    const tenantId = extractStrictTenantId(req);
+    const rawArticleVal = req.query?.article ?? req.body?.article ?? '';
+    const rawSkuVal = req.query?.sku ?? req.body?.sku ?? '';
+    const rawArticle = String(rawArticleVal || '').trim().toUpperCase();
+    const rawSku = String(rawSkuVal || '').trim().toUpperCase();
+    const rawExcludeId = req.query?.excludeId ?? req.body?.excludeId;
+    const excludeId = rawExcludeId ? parseInt(String(rawExcludeId), 10) : null;
+
+    if (!rawArticle) {
+      return res.json({
+        valid: false,
+        error: 'Article code is required.',
+      });
+    }
+
+    // 1. Check Article uniqueness strictly under this store's products (tenant_id)
+    const articleDupRes = await pgClient.query<any>(
+      'SELECT id, tenant_product_no, name, sku, article, barcode FROM products WHERE LOWER(TRIM(article)) = LOWER(TRIM($1)) AND COALESCE(tenant_id, 1) = $2 AND ($3::int IS NULL OR id != $3) LIMIT 1',
+      [rawArticle, tenantId, excludeId]
+    );
+
+    if (articleDupRes.rows.length > 0) {
+      const existing = articleDupRes.rows[0];
+      return res.json({
+        valid: false,
+        isDuplicate: true,
+        duplicateField: 'article',
+        existingProduct: {
+          id: existing.id,
+          tenantProductNo: existing.tenant_product_no || existing.id,
+          name: existing.name,
+          sku: existing.sku,
+          article: existing.article,
+          barcode: existing.barcode,
+        },
+        error: `Article "${rawArticle}" already exists in this store (used by SKU: ${existing.sku}).`,
+      });
+    }
+
+    // 2. Check SKU uniqueness strictly under this store's products (tenant_id)
+    if (rawSku) {
+      const skuDupRes = await pgClient.query<any>(
+        'SELECT id, tenant_product_no, name, sku, article, barcode FROM products WHERE LOWER(TRIM(sku)) = LOWER(TRIM($1)) AND COALESCE(tenant_id, 1) = $2 AND ($3::int IS NULL OR id != $3) LIMIT 1',
+        [rawSku, tenantId, excludeId]
+      );
+
+      if (skuDupRes.rows.length > 0) {
+        const existing = skuDupRes.rows[0];
+        return res.json({
+          valid: false,
+          isDuplicate: true,
+          duplicateField: 'sku',
+          existingProduct: {
+            id: existing.id,
+            tenantProductNo: existing.tenant_product_no || existing.id,
+            name: existing.name,
+            sku: existing.sku,
+            article: existing.article,
+            barcode: existing.barcode,
+          },
+          error: `SKU "${rawSku}" already exists in this store (used by Article: ${existing.article || existing.name}).`,
+        });
+      }
+    }
+
+    return res.json({
+      valid: true,
+      isDuplicate: false,
+      article: rawArticle,
+      sku: rawSku,
+      message: 'Article and SKU are unique under this store.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to validate article/SKU: ' + err.message });
+  }
+};
+router.get('/validate-article', requireAuth, handleValidateArticleAndSku);
+router.post('/validate-article', requireAuth, handleValidateArticleAndSku);
 
 // AI Product Suggestion from Image (multimodal Gemini analysis)
 router.post('/ai-suggest', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -249,13 +420,16 @@ router.post('/ai-suggest', requireAuth, async (req: AuthenticatedRequest, res: R
       return res.status(400).json({ error: 'Please upload or provide a product image to analyze.' });
     }
 
-    // Retrieve current list of existing brands and categories from database products
+    // Retrieve current list of existing brands and categories from this store's products
+    const tenantId = extractStrictTenantId(req);
     const [brandsRes, categoriesRes] = await Promise.all([
       pgClient.query<{ name: string }>(
-        "SELECT DISTINCT brand as name FROM products WHERE brand IS NOT NULL AND TRIM(brand) != '' ORDER BY brand ASC"
+        "SELECT DISTINCT brand as name FROM products WHERE COALESCE(tenant_id, 1) = $1 AND brand IS NOT NULL AND TRIM(brand) != '' ORDER BY brand ASC",
+        [tenantId]
       ),
       pgClient.query<{ name: string }>(
-        "SELECT DISTINCT category as name FROM products WHERE category IS NOT NULL AND TRIM(category) != '' ORDER BY category ASC"
+        "SELECT DISTINCT category as name FROM products WHERE COALESCE(tenant_id, 1) = $1 AND category IS NOT NULL AND TRIM(category) != '' ORDER BY category ASC",
+        [tenantId]
       ),
     ]);
 
@@ -289,33 +463,97 @@ router.post('/ai-suggest', requireAuth, async (req: AuthenticatedRequest, res: R
 });
 
 let productColumnsVerified = false;
+let productColumnsPromise: Promise<void> | null = null;
 
 async function ensureProductAndSettingsColumns() {
   if (productColumnsVerified) return;
-  try {
-    const reg = await pgClient.query<{ has_products: boolean; has_settings: boolean }>(
-      "SELECT (to_regclass('public.products') IS NOT NULL) as has_products, (to_regclass('public.company_settings') IS NOT NULL) as has_settings"
-    );
-    if (reg.rows[0]?.has_settings) {
-      await pgClient.query("ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pricing_mode VARCHAR(30) NOT NULL DEFAULT 'FIXED'");
-      await pgClient.query("ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pricing_policy_locked BOOLEAN NOT NULL DEFAULT false");
-      await pgClient.query("UPDATE company_settings SET pricing_policy_locked = false");
+  if (productColumnsPromise) return productColumnsPromise;
+
+  productColumnsPromise = (async () => {
+    try {
+      const reg = await pgClient.query<{ has_products: boolean; has_settings: boolean }>(
+        "SELECT (to_regclass('public.products') IS NOT NULL) as has_products, (to_regclass('public.company_settings') IS NOT NULL) as has_settings"
+      );
+      if (reg.rows[0]?.has_settings) {
+        await pgClient.query("ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pricing_mode VARCHAR(30) NOT NULL DEFAULT 'FIXED'");
+        await pgClient.query("ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pricing_policy_locked BOOLEAN NOT NULL DEFAULT false");
+        await pgClient.query("ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS deleted_product_ids INTEGER[] NOT NULL DEFAULT '{}'");
+        await pgClient.query("UPDATE company_settings SET pricing_policy_locked = false");
+      }
+      if (reg.rows[0]?.has_products) {
+        await pgClient.query("ALTER TABLE products DROP COLUMN IF EXISTS size");
+        await pgClient.query("ALTER TABLE products DROP COLUMN IF EXISTS color");
+        await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS tenant_product_no INTEGER");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_sku_key");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_barcode_key");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_article_key");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_sku_unique");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_barcode_unique");
+        await pgClient.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_article_unique");
+        await pgClient.exec(`
+          DO $$
+          DECLARE
+            c RECORD;
+            idx RECORD;
+          BEGIN
+            FOR c IN
+              SELECT con.conname
+              FROM pg_constraint con
+              JOIN pg_class rel ON rel.oid = con.conrelid
+              JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+              WHERE nsp.nspname = 'public'
+                AND rel.relname = 'products'
+                AND con.contype = 'u'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(con.conkey) AS k(col_attnum)
+                  JOIN pg_attribute attr ON attr.attrelid = rel.oid AND attr.attnum = k.col_attnum
+                  WHERE attr.attname = 'tenant_id'
+                )
+            LOOP
+              EXECUTE format('ALTER TABLE public.products DROP CONSTRAINT IF EXISTS %I CASCADE', c.conname);
+            END LOOP;
+
+            FOR idx IN
+              SELECT i.relname AS index_name
+              FROM pg_index ix
+              JOIN pg_class t ON t.oid = ix.indrelid
+              JOIN pg_class i ON i.oid = ix.indexrelid
+              JOIN pg_namespace nsp ON nsp.oid = t.relnamespace
+              WHERE nsp.nspname = 'public'
+                AND t.relname = 'products'
+                AND ix.indisunique = true
+                AND ix.indisprimary = false
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(ix.indkey) AS k(col_attnum)
+                  JOIN pg_attribute attr ON attr.attrelid = t.oid AND attr.attnum = k.col_attnum
+                  WHERE attr.attname = 'tenant_id'
+                )
+            LOOP
+              EXECUTE format('DROP INDEX IF EXISTS public.%I CASCADE', idx.index_name);
+            END LOOP;
+          END $$;
+        `).catch(() => {});
+        await pgClient.query("CREATE INDEX IF NOT EXISTS products_tenant_product_no_idx ON products(tenant_id, tenant_product_no)");
+        await pgClient.query("CREATE INDEX IF NOT EXISTS products_tenant_sku_idx ON products(tenant_id, sku)");
+        await pgClient.query("CREATE INDEX IF NOT EXISTS products_tenant_article_idx ON products(tenant_id, article)");
+        await pgClient.query("CREATE INDEX IF NOT EXISTS products_tenant_barcode_idx ON products(tenant_id, barcode)");
+        await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS selling_price INTEGER NOT NULL DEFAULT 0");
+        await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS min_price INTEGER NOT NULL DEFAULT 0");
+        await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS max_price INTEGER NOT NULL DEFAULT 0");
+        await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS pricing_policy VARCHAR(30) DEFAULT NULL");
+      }
+      if (reg.rows[0]?.has_settings && reg.rows[0]?.has_products) {
+        productColumnsVerified = true;
+      }
+    } catch (_) {
+    } finally {
+      productColumnsPromise = null;
     }
-    if (reg.rows[0]?.has_products) {
-      await pgClient.query("ALTER TABLE products DROP COLUMN IF EXISTS size");
-      await pgClient.query("ALTER TABLE products DROP COLUMN IF EXISTS color");
-      await pgClient.query("CREATE INDEX IF NOT EXISTS products_sku_idx ON products(sku)");
-      await pgClient.query("CREATE INDEX IF NOT EXISTS products_article_idx ON products(article)");
-      await pgClient.query("CREATE INDEX IF NOT EXISTS products_barcode_idx ON products(barcode)");
-      await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS selling_price INTEGER NOT NULL DEFAULT 0");
-      await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS min_price INTEGER NOT NULL DEFAULT 0");
-      await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS max_price INTEGER NOT NULL DEFAULT 0");
-      await pgClient.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS pricing_policy VARCHAR(30) DEFAULT NULL");
-    }
-    if (reg.rows[0]?.has_settings && reg.rows[0]?.has_products) {
-      productColumnsVerified = true;
-    }
-  } catch (_) {}
+  })();
+
+  return productColumnsPromise;
 }
 
 // Company pricing settings helper
@@ -376,12 +614,13 @@ function mapProductRow(row: any, settings: { pricingMode: 'FIXED' | 'NEGOTIABLE'
 
   return {
     id: row.id,
+    tenantProductNo: row.tenant_product_no || row.id,
     name: row.name,
     brand: row.brand || 'Local',
     brandName: row.brand || 'Local',
     brandLogo: '',
-    category: row.category || 'Casual Shoes',
-    categoryName: row.category || 'Casual Shoes',
+    category: row.category || 'Men',
+    categoryName: row.category || 'Men',
     sku: row.sku,
     article: row.article || '',
     barcode: row.barcode,
@@ -406,15 +645,15 @@ function mapProductRow(row: any, settings: { pricingMode: 'FIXED' | 'NEGOTIABLE'
   };
 }
 
-// Fast POS Scanner Lookup by Barcode (matches product barcode directly, strictly scoped by req.user.tenantId)
-router.get('/lookup/:barcode', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+// Fast POS Scanner Lookup by Barcode / Article / SKU (strictly scoped by req.user.tenantId)
+router.get(['/lookup/:barcode', '/barcode/:barcode', '/scan/:barcode'], requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     await ensureProductAndSettingsColumns();
     const tenantId = extractStrictTenantId(req);
     const barcode = req.params.barcode.trim();
     const [result, settings] = await Promise.all([
       pgClient.query(
-        `SELECT p.id, p.name, p.brand, p.category, p.sku, p.article, p.barcode,
+        `SELECT p.id, p.tenant_product_no, p.name, p.brand, p.category, p.sku, p.article, p.barcode,
                 p.primary_image_url, p.description, COALESCE(p.cost_price, 0) as cost_price,
                 COALESCE(p.selling_price, 0) as selling_price,
                 COALESCE(p.min_price, 0) as min_price,
@@ -422,7 +661,13 @@ router.get('/lookup/:barcode', requireAuth, async (req: AuthenticatedRequest, re
                 p.total_stock, COALESCE(p.low_stock_limit, 5) as low_stock_limit, p.active, p.pricing_policy, p.created_at, p.updated_at
          FROM products p
          WHERE COALESCE(p.tenant_id, 1) = $2
-           AND (p.barcode = $1 OR LOWER(p.sku) = LOWER($1) OR LOWER(COALESCE(p.article, '')) = LOWER($1))
+           AND (
+             p.barcode = $1
+             OR LOWER(p.barcode) = LOWER($1)
+             OR LOWER(p.sku) = LOWER($1)
+             OR LOWER(COALESCE(p.article, '')) = LOWER($1)
+             OR LOWER(COALESCE(p.name, '')) = LOWER($1)
+           )
            AND p.active = true
          LIMIT 1`,
         [barcode, tenantId]
@@ -431,7 +676,7 @@ router.get('/lookup/:barcode', requireAuth, async (req: AuthenticatedRequest, re
     ]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: `Product with barcode or SKU "${barcode}" not found in this store.` });
+      return res.status(404).json({ error: `Product with barcode or article "${barcode}" not found in this store.` });
     }
 
     const product = mapProductRow(result.rows[0], settings);
@@ -449,7 +694,7 @@ router.get('/', requireAuth, async (req: AuthenticatedRequest, res: Response) =>
     const { search, brand, category, brandId, categoryId, lowStockOnly, limit } = req.query;
 
     let query = `
-      SELECT p.id, p.name, p.brand, p.category, p.sku, p.article, p.barcode,
+      SELECT p.id, p.tenant_product_no, p.name, p.brand, p.category, p.sku, p.article, p.barcode,
              p.primary_image_url, p.description, COALESCE(p.cost_price, 0) as cost_price,
              COALESCE(p.selling_price, 0) as selling_price,
              COALESCE(p.min_price, 0) as min_price,
@@ -607,46 +852,53 @@ router.post('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, re
 
     // Brand and Category strings
     const finalBrand = (brand || brandName || (typeof brandId === 'string' ? brandId : '') || '').trim() || 'Local';
-    const finalCategory = (category || categoryName || (typeof categoryId === 'string' ? categoryId : '') || '').trim() || 'Casual Shoes';
+    const finalCategory = normalizeFootwearCategory(
+      category || categoryName || (typeof categoryId === 'string' ? categoryId : '') || 'Men'
+    );
     const brandPrefix = parseBrandPrefix(finalBrand);
 
-    // Get next product ID (auto-incrementing, non-reusable integer from PostgreSQL)
-    const predictedId = await getNextProductId();
-    if (predictedId > 99999) {
-      return res.status(400).json({ error: 'Product ID limit of 99,999 reached for 5-digit barcode generation.' });
+    // Get next per-store product number (recycled deleted ID first, else COUNT(*) + 1)
+    // Note: Changing Article or Barcode manually NEVER alters the other product identifiers
+    // and NEVER pushes predictedId into deleted_product_ids.
+    const predictedId = await getNextProductId(tenantId);
+
+    // 1. Validate Article uniqueness within this store
+    const articleCheck = await pgClient.query<any>(
+      'SELECT id, name, sku, article FROM products WHERE LOWER(TRIM(article)) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+      [cleanArticle, tenantId]
+    );
+    if (articleCheck.rows.length > 0) {
+      const existingArt = articleCheck.rows[0];
+      return res.status(400).json({
+        error: `A product with Article "${cleanArticle}" already exists in this store (SKU: ${existingArt.sku}).`,
+      });
     }
 
-    // Automated SKU Backend Handling:
-    // Format: ${brandCode}-${articleNumber}-${predictedId}
-    const autoSku = generateSku(brandPrefix, cleanArticle, predictedId);
+    // 2. Automated SKU Backend Handling (Independent of manual Article override):
+    // Default SKU uses store's standard [BrandPrefix]-[DefaultStoreArticle]-[predictedId]
+    const defaultStoreArticle = generateSuggestedArticle(parseCategoryPrefix(finalCategory), predictedId);
+    const autoSku = generateSku(brandPrefix, defaultStoreArticle, predictedId);
     let finalSku = (sku && sku.trim()) ? sku.trim().toUpperCase() : autoSku;
 
-    // Check SKU uniqueness in this tenant; if auto-generated collision occurs, append product ID for safe isolation
-    const skuCheck = await pgClient.query('SELECT id FROM products WHERE LOWER(sku) = LOWER($1) AND COALESCE(tenant_id, 1) = $2', [finalSku, tenantId]);
+    // Validate SKU uniqueness in this store
+    const skuCheck = await pgClient.query<any>(
+      'SELECT id, name, sku, article FROM products WHERE LOWER(TRIM(sku)) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+      [finalSku, tenantId]
+    );
     if (skuCheck.rows.length > 0) {
-      if (!sku || !sku.trim()) {
-        finalSku = `${brandPrefix}-${cleanArticle}-${predictedId}`;
-      } else {
-        return res.status(400).json({ error: `A product with SKU "${finalSku}" already exists in this store.` });
-      }
+      const existingSku = skuCheck.rows[0];
+      return res.status(400).json({
+        error: `A product with SKU "${finalSku}" already exists in this store (Article: ${existingSku.article || existingSku.name}).`,
+      });
     }
 
-    // Get company prefix from settings (strictly 7 digits)
-    const settingsRes = await pgClient.query<{ barcode_prefix: string }>('SELECT barcode_prefix FROM company_settings WHERE COALESCE(tenant_id, 1) = $1 LIMIT 1', [tenantId]);
-    const rawPrefix = settingsRes.rows[0]?.barcode_prefix || '0108923';
-    const prefixCheck = validateBarcodePrefix(rawPrefix);
-    if (!prefixCheck.isValid) {
-      return res.status(400).json({ error: prefixCheck.error || 'Barcode prefix must be exactly 7 digits in Settings.' });
-    }
-    const prefix = sanitizePrefix(rawPrefix);
-
-    // Barcode: Internal Store EAN-13 or External Manufacturer Box Barcode
+    // Barcode: Store Standard Code-128 (no prefix, no zero-padding) or Manufacturer Box Barcode Override
     let finalBarcode = barcode ? barcode.trim() : '';
     if (!finalBarcode) {
-      const generated = await generateProductEan13(predictedId, tenantId);
+      const generated = await generateProductEan13(predictedId, tenantId, finalCategory);
       finalBarcode = generated.barcode;
     } else {
-      const analysis = analyzeBarcode(finalBarcode, prefix);
+      const analysis = analyzeBarcode(finalBarcode);
       if (!analysis.isValid) {
         return res.status(400).json({ error: analysis.error || 'Barcode validation failed.' });
       }
@@ -681,13 +933,14 @@ router.post('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, re
     try {
       const productRes = await pgClient.query<{ id: number }>(
         `INSERT INTO products (
-          tenant_id, name, brand, category, sku, article, barcode, primary_image_url,
+          tenant_id, tenant_product_no, name, brand, category, sku, article, barcode, primary_image_url,
           description, cost_price, selling_price, min_price, max_price,
           total_stock, low_stock_limit, active, pricing_policy
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true, $16)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, $17)
         RETURNING id`,
         [
           tenantId,
+          predictedId,
           cleanName,
           finalBrand,
           finalCategory,
@@ -708,11 +961,8 @@ router.post('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, re
 
       const productId = productRes.rows[0].id;
 
-      if (productId !== predictedId && !barcode) {
-        const correctBarcode = generateEan13Barcode(prefix, productId).barcode;
-        await pgClient.query('UPDATE products SET barcode = $1 WHERE id = $2 AND COALESCE(tenant_id, 1) = $3', [correctBarcode, productId, tenantId]);
-        finalBarcode = correctBarcode;
-      }
+      // Consume the recycled number from company_settings.deleted_product_ids if it was in the deleted pool
+      await consumeDeletedProductNo(tenantId, predictedId);
 
       if (physicalStock > 0) {
         await pgClient.query(
@@ -791,8 +1041,8 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, 
       ? (String(brand).trim() || 'Local')
       : (brandName !== undefined ? (String(brandName).trim() || 'Local') : (current.brand || 'Local'));
     const finalCategory = category !== undefined
-      ? (String(category).trim() || 'Casual Shoes')
-      : (categoryName !== undefined ? (String(categoryName).trim() || 'Casual Shoes') : (current.category || 'Casual Shoes'));
+      ? normalizeFootwearCategory(String(category))
+      : (categoryName !== undefined ? normalizeFootwearCategory(String(categoryName)) : normalizeFootwearCategory(current.category || 'Men'));
 
     if (article !== undefined && !article.trim()) {
       return res.status(400).json({ error: 'Article is a mandatory field.' });
@@ -804,30 +1054,46 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, 
       ? name.trim()
       : (article !== undefined && article.trim() ? article.trim().toUpperCase() : current.name);
 
-    // Check SKU conflict
-    if (sku && sku.trim().toUpperCase() !== current.sku) {
-      const skuCheck = await pgClient.query('SELECT id FROM products WHERE LOWER(sku) = LOWER($1) AND id != $2', [
-        sku.trim(),
-        id,
-      ]);
-      if (skuCheck.rows.length > 0) {
-        return res.status(400).json({ error: `SKU "${sku}" is already in use by another product.` });
+    // Check Article uniqueness within this store (excluding current product id)
+    if (finalArticle) {
+      const articleCheck = await pgClient.query<any>(
+        'SELECT id, name, sku, article FROM products WHERE LOWER(TRIM(article)) = LOWER($1) AND id != $2 AND COALESCE(tenant_id, 1) = $3 LIMIT 1',
+        [finalArticle, id, tenantId]
+      );
+      if (articleCheck.rows.length > 0) {
+        const existingArt = articleCheck.rows[0];
+        return res.status(400).json({
+          error: `Article "${finalArticle}" is already in use by another product in this store (SKU: ${existingArt.sku}).`,
+        });
       }
     }
 
-    // Check barcode conflict & validation
+    // Check SKU conflict within this store (excluding current product id)
+    const finalSkuToUpdate = sku && sku.trim() ? sku.trim().toUpperCase() : current.sku;
+    if (finalSkuToUpdate) {
+      const skuCheck = await pgClient.query<any>(
+        'SELECT id, name, sku, article FROM products WHERE LOWER(TRIM(sku)) = LOWER($1) AND id != $2 AND COALESCE(tenant_id, 1) = $3 LIMIT 1',
+        [finalSkuToUpdate, id, tenantId]
+      );
+      if (skuCheck.rows.length > 0) {
+        const existingSku = skuCheck.rows[0];
+        return res.status(400).json({
+          error: `SKU "${finalSkuToUpdate}" is already in use by another product in this store (Article: ${existingSku.article || existingSku.name}).`,
+        });
+      }
+    }
+
+    // Check barcode conflict & validation within this store
     let finalBarcode = current.barcode;
     if (barcode && barcode.trim() !== current.barcode) {
       const cleanBarcode = barcode.trim();
-      const prefixRes = await pgClient.query<any>('SELECT barcode_prefix FROM company_settings LIMIT 1');
-      const prefix = prefixRes.rows[0]?.barcode_prefix || '0108923';
-      const analysis = analyzeBarcode(cleanBarcode, prefix);
+      const analysis = analyzeBarcode(cleanBarcode);
       if (!analysis.isValid) {
         return res.status(400).json({ error: analysis.error || 'Barcode validation failed.' });
       }
       const barcodeCheck = await pgClient.query<any>(
-        'SELECT id, name, sku FROM products WHERE barcode = $1 AND id != $2',
-        [cleanBarcode, id]
+        'SELECT id, name, sku FROM products WHERE barcode = $1 AND id != $2 AND COALESCE(tenant_id, 1) = $3',
+        [cleanBarcode, id, tenantId]
       );
       if (barcodeCheck.rows.length > 0) {
         const existing = barcodeCheck.rows[0];
@@ -912,16 +1178,56 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, 
 // Delete Product (Admin Only, Strictly scoped by req.user.tenantId)
 router.delete('/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    await ensureProductAndSettingsColumns();
     const tenantId = extractStrictTenantId(req);
     const id = parseInt(req.params.id, 10);
-    const salesCheck = await pgClient.query('SELECT id FROM sale_items WHERE product_id = $1 AND COALESCE(tenant_id, 1) = $2 LIMIT 1', [id, tenantId]);
+
+    const prodRes = await pgClient.query<{
+      id: number;
+      tenant_product_no: number | null;
+      barcode: string;
+      sku: string;
+    }>(
+      'SELECT id, tenant_product_no, barcode, sku FROM products WHERE id = $1 AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+      [id, tenantId]
+    );
+    if (prodRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found in your store.' });
+    }
+    const targetProd = prodRes.rows[0];
+
+    const salesCheck = await pgClient.query(
+      'SELECT id FROM sale_items WHERE product_id = $1 AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+      [id, tenantId]
+    );
     if (salesCheck.rows.length > 0) {
-      await pgClient.query('UPDATE products SET active = false, updated_at = NOW() WHERE id = $1 AND COALESCE(tenant_id, 1) = $2', [id, tenantId]);
+      await pgClient.query(
+        'UPDATE products SET active = false, updated_at = NOW() WHERE id = $1 AND COALESCE(tenant_id, 1) = $2',
+        [id, tenantId]
+      );
       return res.json({ message: 'Product has historic sales records; it has been deactivated instead of deleted.' });
     }
 
+    // Resolve the per-store product number being freed ONLY when the product itself is deleted
+    let freedProductNo = Number(targetProd.tenant_product_no || 0);
+    if (!freedProductNo || freedProductNo < 1) {
+      const skuTailMatch = String(targetProd.sku || '').match(/-(\d+)$/);
+      if (skuTailMatch) {
+        const parsedNo = parseInt(skuTailMatch[1], 10);
+        if (!isNaN(parsedNo) && parsedNo >= 1) {
+          freedProductNo = parsedNo;
+        }
+      }
+    }
+
     await pgClient.query('DELETE FROM products WHERE id = $1 AND COALESCE(tenant_id, 1) = $2', [id, tenantId]);
-    res.json({ message: 'Product deleted successfully.' });
+
+    // Save the deleted product number into company_settings.deleted_product_ids for future reuse
+    if (freedProductNo >= 1) {
+      await recordDeletedProductNo(tenantId, freedProductNo);
+    }
+
+    res.json({ message: 'Product deleted successfully.', recycledProductNo: freedProductNo || null });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete product: ' + err.message });
   }
@@ -932,24 +1238,18 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthenticatedReques
 router.post('/bulk-import', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     await ensureProductAndSettingsColumns();
+    const tenantId = extractStrictTenantId(req);
     const { items, duplicateStrategy = 'MERGE' } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'No product rows provided for import.' });
     }
 
-    const settings = await getCompanyPricingSettings();
-    const settingsRes = await pgClient.query<{ barcode_prefix: string; low_stock_limit: number }>(
-      'SELECT barcode_prefix, low_stock_limit FROM company_settings LIMIT 1'
+    const settings = await getCompanyPricingSettings(tenantId);
+    const settingsRes = await pgClient.query<{ low_stock_limit: number }>(
+      'SELECT low_stock_limit FROM company_settings WHERE COALESCE(tenant_id, 1) = $1 LIMIT 1',
+      [tenantId]
     );
-    const rawPrefix = settingsRes.rows[0]?.barcode_prefix || '0108923';
-    const prefixCheck = validateBarcodePrefix(rawPrefix);
-    if (!prefixCheck.isValid) {
-      return res.status(400).json({
-        error: prefixCheck.error || 'Barcode prefix must be exactly 7 digits in Settings.',
-      });
-    }
-    const prefix = sanitizePrefix(rawPrefix);
     const defaultLowStockLimit = settingsRes.rows[0]?.low_stock_limit || 5;
 
     let createdCount = 0;
@@ -967,32 +1267,32 @@ router.post('/bulk-import', requireAuth, requireAdmin, async (req: Authenticated
         const finalBrand = rawBrand || 'Local';
 
         const rawCategory = String(rawItem.category ?? rawItem.categoryName ?? '').trim();
-        const finalCategory = rawCategory || 'Casual Shoes';
+        const finalCategory = rawCategory || 'Men';
 
         const rawBarcode = String(rawItem.barcode ?? '').trim();
         const rawArticle = String(rawItem.article ?? '').trim().toUpperCase();
         const rawSku = String(rawItem.sku ?? '').trim().toUpperCase();
 
-        // Check if this row matches an existing product by barcode, article, or sku
+        // Check if this row matches an existing product in this store by barcode, article, or sku
         let existingProduct: any = null;
         if (rawBarcode) {
           const byBarcode = await pgClient.query(
-            'SELECT * FROM products WHERE barcode = $1 LIMIT 1',
-            [rawBarcode]
+            'SELECT * FROM products WHERE barcode = $1 AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+            [rawBarcode, tenantId]
           );
           if (byBarcode.rows.length > 0) existingProduct = byBarcode.rows[0];
         }
         if (!existingProduct && rawArticle) {
           const byArticle = await pgClient.query(
-            'SELECT * FROM products WHERE LOWER(article) = LOWER($1) LIMIT 1',
-            [rawArticle]
+            'SELECT * FROM products WHERE LOWER(article) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+            [rawArticle, tenantId]
           );
           if (byArticle.rows.length > 0) existingProduct = byArticle.rows[0];
         }
         if (!existingProduct && rawSku) {
           const bySku = await pgClient.query(
-            'SELECT * FROM products WHERE LOWER(sku) = LOWER($1) LIMIT 1',
-            [rawSku]
+            'SELECT * FROM products WHERE LOWER(sku) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+            [rawSku, tenantId]
           );
           if (bySku.rows.length > 0) existingProduct = bySku.rows[0];
         }
@@ -1189,53 +1489,71 @@ router.post('/bulk-import', requireAuth, requireAdmin, async (req: Authenticated
           }
         }
 
-        // Creating a NEW Product using existing generation functions
-        const predictedId = await getNextProductId();
-        if (predictedId > 99999) {
-          throw new Error('Product ID limit of 99,999 reached for 5-digit barcode generation.');
-        }
+        // Creating a NEW Product using per-store sequence (recycled deleted ID or COUNT(*) + 1)
+        const predictedId = await getNextProductId(tenantId);
 
         const catPrefix = parseCategoryPrefix(finalCategory);
         const brandPrefix = parseBrandPrefix(finalBrand);
 
-        const cleanArticle = rawArticle || generateSuggestedArticle(catPrefix, predictedId);
+        const storeStandardArticle = generateSuggestedArticle(catPrefix, predictedId);
+        const cleanArticle = rawArticle || storeStandardArticle;
         const cleanName = String(rawItem.name ?? '').trim() || cleanArticle;
 
-        let finalSku = rawSku || generateSku(brandPrefix, cleanArticle, predictedId);
-        const skuConflict = await pgClient.query(
-          'SELECT id FROM products WHERE LOWER(sku) = LOWER($1)',
-          [finalSku]
+        // Validate Article uniqueness before inserting new product
+        const articleConflict = await pgClient.query<{ id: number; sku: string }>(
+          'SELECT id, sku FROM products WHERE LOWER(TRIM(article)) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+          [cleanArticle, tenantId]
+        );
+        if (articleConflict.rows.length > 0) {
+          throw new Error(
+            `Row (${cleanArticle}): Article "${cleanArticle}" already exists in this store (SKU: ${articleConflict.rows[0].sku}).`
+          );
+        }
+
+        // Auto-generated SKU uses storeStandardArticle so manual Article overrides never alter SKU
+        let finalSku = rawSku || generateSku(brandPrefix, storeStandardArticle, predictedId);
+        const skuConflict = await pgClient.query<{ id: number; article: string }>(
+          'SELECT id, article FROM products WHERE LOWER(TRIM(sku)) = LOWER($1) AND COALESCE(tenant_id, 1) = $2 LIMIT 1',
+          [finalSku, tenantId]
         );
         if (skuConflict.rows.length > 0) {
-          finalSku = `${brandPrefix}-${cleanArticle}-${predictedId}`;
+          if (rawSku) {
+            throw new Error(
+              `Row (${cleanArticle}): SKU "${finalSku}" already exists in this store (Article: ${skuConflict.rows[0].article}).`
+            );
+          }
+          finalSku = `${brandPrefix}-${storeStandardArticle}-${predictedId}`;
         }
 
         let finalBarcode = rawBarcode;
         if (!finalBarcode) {
-          const generated = await generateProductEan13(predictedId);
+          const generated = await generateProductEan13(predictedId, tenantId, finalCategory);
           finalBarcode = generated.barcode;
         } else {
-          const analysis = analyzeBarcode(finalBarcode, prefix);
+          const analysis = analyzeBarcode(finalBarcode);
           if (!analysis.isValid) {
             throw new Error(`Row (${cleanArticle}): ${analysis.error || 'Invalid barcode'}`);
           }
-          const bCheck = await pgClient.query('SELECT id FROM products WHERE barcode = $1', [
-            finalBarcode,
-          ]);
+          const bCheck = await pgClient.query(
+            'SELECT id FROM products WHERE barcode = $1 AND COALESCE(tenant_id, 1) = $2',
+            [finalBarcode, tenantId]
+          );
           if (bCheck.rows.length > 0) {
-            const generated = await generateProductEan13(predictedId);
+            const generated = await generateProductEan13(predictedId, tenantId, finalCategory);
             finalBarcode = generated.barcode;
           }
         }
 
         const insertRes = await pgClient.query<{ id: number }>(
           `INSERT INTO products (
-            name, brand, category, sku, article, barcode, primary_image_url,
+            tenant_id, tenant_product_no, name, brand, category, sku, article, barcode, primary_image_url,
             description, cost_price, selling_price, min_price, max_price,
-            total_stock, low_stock_limit, active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true)
+            total_stock, low_stock_limit, active, pricing_policy
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, $17)
           RETURNING id`,
           [
+            tenantId,
+            predictedId,
             cleanName,
             finalBrand,
             finalCategory,
@@ -1250,27 +1568,19 @@ router.post('/bulk-import', requireAuth, requireAdmin, async (req: Authenticated
             finalMaxPrice,
             importedStock,
             importedLowStock,
+            chosenItemPolicy,
           ]
         );
 
         const actualId = insertRes.rows[0].id;
-        if (actualId !== predictedId && !rawBarcode) {
-          const correctedBarcode = generateEan13Barcode(prefix, actualId).barcode;
-          const correctedArticle = rawArticle || generateSuggestedArticle(catPrefix, actualId);
-          const correctedSku = rawSku || generateSku(brandPrefix, correctedArticle, actualId);
-          const correctedName = String(rawItem.name ?? '').trim() || correctedArticle;
-          await pgClient.query(
-            'UPDATE products SET barcode = $1, article = $2, sku = $3, name = $4 WHERE id = $5',
-            [correctedBarcode, correctedArticle, correctedSku, correctedName, actualId]
-          );
-        }
+        await consumeDeletedProductNo(tenantId, predictedId);
 
         if (importedStock > 0) {
           await pgClient.query(
             `INSERT INTO stock_movements (
-              product_id, qty_change, prev_stock, new_stock, movement_type, reference_id, user_id, notes
-            ) VALUES ($1, $2, 0, $2, 'PURCHASE', 'CSV-IMPORT-NEW', $3, 'Initial product inventory via CSV import')`,
-            [actualId, importedStock, req.user!.id]
+              tenant_id, product_id, qty_change, prev_stock, new_stock, movement_type, reference_id, user_id, notes
+            ) VALUES ($1, $2, $3, 0, $3, 'PURCHASE', 'CSV-IMPORT-NEW', $4, 'Initial product inventory via CSV import')`,
+            [tenantId, actualId, importedStock, req.user!.id]
           );
         }
 

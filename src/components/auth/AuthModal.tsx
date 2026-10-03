@@ -16,7 +16,7 @@ import {
   Sun,
   Moon,
 } from 'lucide-react';
-import { api, setAuthToken } from '../../services/api.ts';
+import { api, setAuthSession, getActiveTenantSlug } from '../../services/api.ts';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { ShowroomBackground } from '../common/ShowroomBackground.tsx';
 import { PublicHeader } from '../common/PublicHeader.tsx';
@@ -53,7 +53,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  const activeSlug = (companySettings?.slug || '').trim().toLowerCase();
+  const activeSlug = (companySettings?.slug || getActiveTenantSlug() || '').trim().toLowerCase();
+  const activeStoreHost = (() => {
+    if (!activeSlug) return '';
+    if (typeof window === 'undefined' || !window.location.host) return activeSlug;
+    const host = window.location.host.toLowerCase();
+    if (host.startsWith(`${activeSlug}.`)) return host;
+    return `${activeSlug}.${host}`;
+  })();
+  const rawTenantId = Number(
+    companySettings?.tenant_id ?? companySettings?.tenantId ?? companySettings?.id ?? 0
+  );
+  const activeTenantId = Number.isInteger(rawTenantId) && rawTenantId > 0 ? rawTenantId : null;
 
   // Hidden by default for a few ms, then fades in smoothly
   const [isVisible, setIsVisible] = useState(false);
@@ -83,11 +94,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const res = await api.auth.login({ email, password, tenantSlug: activeSlug });
-      setAuthToken(res.token);
+      const res = activeSlug
+        ? await api.auth.storeLogin({
+            email: email.trim(),
+            password,
+            tenantId: activeTenantId,
+            tenant_id: activeTenantId,
+            tenantSlug: activeSlug,
+            storeSubdomain: activeSlug,
+          })
+        : await api.auth.login({
+            email: email.trim(),
+            password,
+            tenantId: activeTenantId,
+            tenant_id: activeTenantId,
+            tenantSlug: activeSlug || null,
+          });
+      setAuthSession(res.token, res.user);
       onSuccess(res.user);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Login failed. Please verify your credentials.');
+      setErrorMessage(err.message || 'Login failed. Please verify your store credentials.');
     } finally {
       setIsLoading(false);
     }
@@ -99,11 +125,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMessage(null);
     setInfoMessage(null);
     try {
-      const res = await api.auth.forgotPassword({ email });
+      const res = await api.auth.forgotPassword({
+        email: email.trim(),
+        tenantId: activeTenantId,
+        tenantSlug: activeSlug || null,
+      });
       setResetToken('');
       setInfoMessage(
         res.message ||
-          'If the email exists in our system, a password reset verification token has been issued. Please enter your verification token below.'
+          'If the email exists in this store, a password reset verification token has been issued. Please enter your verification token below.'
       );
       setTab('reset');
     } catch (err: any) {
@@ -119,7 +149,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMessage(null);
     setInfoMessage(null);
     try {
-      await api.auth.resetPassword({ email, token: resetToken.trim(), newPassword });
+      await api.auth.resetPassword({
+        email: email.trim(),
+        token: resetToken.trim(),
+        newPassword,
+        tenantId: activeTenantId,
+        tenantSlug: activeSlug || null,
+      });
       setInfoMessage('Password has been reset successfully! You can now log in.');
       setResetToken('');
       setNewPassword('');
@@ -164,6 +200,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <p className="text-xs text-slate-500 dark:text-purple-200/80 mt-1 font-medium">
                   Authorized Personnel Counter Terminal &bull; POS Access
                 </p>
+                {activeSlug && (
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 dark:bg-purple-950/60 border border-purple-200/80 dark:border-purple-800/70 text-[11px] font-mono font-bold text-purple-700 dark:text-purple-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span>{activeStoreHost} &bull; Store Auth Route</span>
+                  </div>
+                )}
               </div>
 
               {/* Card Tabs Navigation - Responsive Scrollable Underline Navigation */}

@@ -9,6 +9,7 @@ import {
   updateOfflineSaleStatus,
   deleteOfflineSale,
   cacheCatalogOffline,
+  resolveActiveStoreSubdomain,
 } from '../utils/offlineDb.ts';
 
 type QueueListener = (
@@ -181,15 +182,17 @@ class OfflineQueueService {
    * Save an offline sale to IndexedDB
    */
   public async enqueueSale(sale: Omit<QueuedSale, 'clientTxId' | 'createdAt' | 'status'>): Promise<QueuedSale> {
-    const clientTxId = `OFFLINE-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const storeSubdomain = resolveActiveStoreSubdomain();
+    const clientTxId = `OFFLINE-${storeSubdomain.toUpperCase()}-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
     const queued: QueuedSale = {
       ...sale,
+      storeSubdomain,
       clientTxId,
       createdAt: new Date().toISOString(),
       status: 'PENDING',
     };
 
-    await queueOfflineSale(queued);
+    await queueOfflineSale(queued, storeSubdomain);
     await this.notify();
 
     // If online right now, attempt immediate background flush
@@ -266,7 +269,7 @@ class OfflineQueueService {
 
         // Mark as synced with generated official invoice number
         await updateOfflineSaleStatus(sale.clientTxId, 'SYNCED', {
-          syncedInvoiceNumber: res.invoiceNumber,
+          syncedInvoiceNumber: res?.sale?.invoiceNumber || res?.invoiceNumber,
           syncedAt: new Date().toISOString(),
           errorMessage: undefined,
         });
@@ -317,14 +320,16 @@ class OfflineQueueService {
    * Helper to refresh offline catalog cache
    */
   public async primeCatalogCache(): Promise<void> {
+    const token = getAuthToken();
+    if (!token) return;
     try {
       const res = await api.products.list({ limit: 500 } as any);
       if (res && res.products) {
         await cacheCatalogOffline(res.products);
         console.log(`[OfflineSync] Cached ${res.products.length} products for offline POS use.`);
       }
-    } catch (err) {
-      console.warn('[OfflineSync] Could not prime catalog cache:', err);
+    } catch {
+      // Ignore transient network blips during background cache priming
     }
   }
 
@@ -367,7 +372,7 @@ class OfflineQueueService {
       const res = await api.pos.checkout(payload);
 
       await updateOfflineSaleStatus(sale.clientTxId, 'SYNCED', {
-        syncedInvoiceNumber: res.invoiceNumber,
+        syncedInvoiceNumber: res?.sale?.invoiceNumber || res?.invoiceNumber,
         syncedAt: new Date().toISOString(),
         errorMessage: undefined,
       });

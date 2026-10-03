@@ -1,6 +1,6 @@
 {
   "id": "/admin/",
-  "name": "MyPOS SaaS C-Panel",
+  "name": "POS SaaS C-Panel",
   "short_name": "POS Admin",
   "description": "Dedicated SuperAdmin Control Plane for Multi-Tenant POS Provisioning, Store Suspension & SaaS Analytics",
   "start_url": "/admin",
@@ -23,10 +23,22 @@
       "purpose": "any"
     },
     {
+      "src": "/pwa-maskable-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
       "src": "/pwa-maskable-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

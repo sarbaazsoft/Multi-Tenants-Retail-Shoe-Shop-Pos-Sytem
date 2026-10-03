@@ -10,7 +10,7 @@ interface DynamicManifestManagerProps {
 /**
  * Dynamically rewrites `<link rel="manifest">`, `<meta name="theme-color">`,
  * and `document.title` for:
- * - SuperAdmin Dedicated PWA (`/admin/manifest.webmanifest`, `#0F172A`, "MyPOS SaaS C-Panel")
+ * - SuperAdmin Dedicated PWA (`/admin/manifest.webmanifest`, `#0F172A`, "POS SaaS C-Panel")
  * - Per-Tenant Dynamic Store PWA (`/api/tenants/:slug/manifest`, tenant themeColor, store name)
  * - Root SaaS Landing Page (`/manifest.webmanifest`)
  */
@@ -25,12 +25,12 @@ export const DynamicManifestManager: React.FC<DynamicManifestManagerProps> = ({
 
     let manifestHref = '/manifest.webmanifest';
     let activeThemeColor = '#0F172A';
-    let pageTitle = 'MyPOS Cloud — Multi-Tenant Footwear POS SaaS';
+    let pageTitle = 'Multi-Tenant Footwear POS SaaS';
 
     if (mode === 'SUPERADMIN') {
       manifestHref = '/admin/manifest.webmanifest';
       activeThemeColor = '#0F172A';
-      pageTitle = 'MyPOS SaaS C-Panel | POS Admin';
+      pageTitle = 'POS SaaS C-Panel | POS Admin';
     } else if (mode === 'TENANT_ACTIVE' && tenantSlug) {
       manifestHref = `/api/tenants/${encodeURIComponent(tenantSlug)}/manifest`;
       activeThemeColor = themeColor || '#7C3AED';
@@ -41,7 +41,7 @@ export const DynamicManifestManager: React.FC<DynamicManifestManagerProps> = ({
       pageTitle = `Store Suspended — ${tenantName || tenantSlug}`;
     } else if (mode === 'TENANT_NOT_FOUND' && tenantSlug) {
       activeThemeColor = '#0F172A';
-      pageTitle = `Store Not Found (${tenantSlug}) — MyPOS Cloud`;
+      pageTitle = `Store Not Found (${tenantSlug}) — POS Cloud`;
     }
 
     // Update or create <link rel="manifest">

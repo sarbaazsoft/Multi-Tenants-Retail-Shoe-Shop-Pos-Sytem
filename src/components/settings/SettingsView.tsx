@@ -255,7 +255,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     currency_name: companySettings?.currency_name || companySettings?.currencyName || 'Pakistani Rupee',
     currency_symbol: companySettings?.currency_symbol || companySettings?.currencySymbol || 'Rs.',
-    barcode_prefix: companySettings?.barcode_prefix || companySettings?.barcodePrefix || '9861234',
     purchase_prefix: companySettings?.purchase_prefix || companySettings?.purchasePrefix || 'PUR-',
     invoice_prefix: companySettings?.invoice_prefix || companySettings?.invoicePrefix || 'INV-',
 
@@ -307,7 +306,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           currency_name: s?.currency_name || s?.currencyName || 'Pakistani Rupee',
           currency_symbol: s?.currency_symbol || s?.currencySymbol || 'Rs.',
-          barcode_prefix: s?.barcode_prefix || s?.barcodePrefix || '9861234',
           purchase_prefix: s?.purchase_prefix || s?.purchasePrefix || 'PUR-',
           invoice_prefix: s?.invoice_prefix || s?.invoicePrefix || 'INV-',
 
@@ -353,7 +351,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         currency_name: companySettings?.currency_name || companySettings?.currencyName || 'Pakistani Rupee',
         currency_symbol: companySettings?.currency_symbol || companySettings?.currencySymbol || 'Rs.',
-        barcode_prefix: companySettings?.barcode_prefix || companySettings?.barcodePrefix || '9861234',
         purchase_prefix: companySettings?.purchase_prefix || companySettings?.purchasePrefix || 'PUR-',
         invoice_prefix: companySettings?.invoice_prefix || companySettings?.invoicePrefix || 'INV-',
 
@@ -694,9 +691,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
     if (!formData.currency_symbol.trim()) {
       errors.currency_symbol = 'Currency symbol is required (e.g., "Rs.", "$", "PKR").';
-    }
-    if (!/^\d{7}$/.test(formData.barcode_prefix.trim())) {
-      errors.barcode_prefix = 'Barcode prefix must be strictly 7 numeric digits (e.g., 0108923 or 2000001).';
     }
     if (!formData.purchase_prefix.trim()) {
       errors.purchase_prefix = 'Purchase prefix is required (e.g., "PUR-").';
@@ -1682,8 +1676,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-purple-200/70 mt-0.5 font-normal">
                     {formData.pricing_policy_locked
-                      ? 'Core POS defaults (currency, 7-digit barcode prefix, and invoice/purchase prefixes) are permanently locked after initial store setup.'
-                      : 'System identifiers, currency parameters, and 7-digit barcode standards required to run POS'}
+                      ? 'Core POS defaults (currency and invoice/purchase prefixes) are permanently locked after initial store setup.'
+                      : 'System identifiers and currency parameters required to run POS'}
                   </p>
                 </div>
               </div>
@@ -1778,79 +1772,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <p className="text-rose-600 dark:text-rose-400 text-[11px] mt-1.5">{formErrors.currency_symbol}</p>
                 )}
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">Printed on POS receipts &amp; invoice totals</p>
-              </div>
-
-              {/* barcode_prefix (Strictly 7 Digits with Live Barcode SVG Visual) */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <span>
-                      Barcode Prefix <span className="text-rose-500 font-bold">*</span>
-                    </span>
-                    {formData.pricing_policy_locked && (
-                      <Lock className="w-3 h-3 text-amber-500" />
-                    )}
-                  </label>
-                  <span
-                    className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
-                      formData.barcode_prefix.length === 7
-                        ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60'
-                        : 'bg-amber-950/80 text-amber-400 border-amber-800/60'
-                    }`}
-                  >
-                    {formData.barcode_prefix.length} / 7 digits
-                  </span>
-                </div>
-                <div className="relative flex items-center">
-                  <Barcode className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none z-10" />
-                  <input
-                    type="text"
-                    value={formData.barcode_prefix}
-                    maxLength={7}
-                    disabled={Boolean(formData.pricing_policy_locked)}
-                    readOnly={Boolean(formData.pricing_policy_locked)}
-                    onChange={(e) => {
-                      if (formData.pricing_policy_locked) return;
-                      const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 7);
-                      setFormData({ ...formData, barcode_prefix: digitsOnly });
-                      if (formErrors.barcode_prefix && digitsOnly.length === 7) {
-                        setFormErrors({ ...formErrors, barcode_prefix: '' });
-                      }
-                    }}
-                    placeholder="8961234"
-                    className={`w-full h-11 pl-10 pr-24 rounded-xl border bg-slate-50 dark:bg-[#060B18]/90 font-mono font-bold tracking-wider text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 outline-none transition-all ${
-                      formData.pricing_policy_locked
-                        ? 'opacity-75 cursor-not-allowed select-none border-emerald-600/50 dark:border-emerald-500/40'
-                        : formData.barcode_prefix.length === 7
-                        ? 'border-emerald-600/80 dark:border-emerald-500/70 focus:ring-2 focus:ring-emerald-500/20'
-                        : formErrors.barcode_prefix
-                        ? 'border-rose-400 ring-2 ring-rose-500/20 bg-rose-50/10'
-                        : 'border-slate-300 dark:border-slate-800 focus:border-blue-500'
-                    }`}
-                    required
-                  />
-                  {formData.barcode_prefix.length === 7 && (
-                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none opacity-85 overflow-hidden max-w-[85px]">
-                      <BarcodeSvg
-                        value={`${formData.barcode_prefix}`}
-                        format="CODE128"
-                        width={1}
-                        height={24}
-                        displayValue={false}
-                      />
-                    </div>
-                  )}
-                </div>
-                {formErrors.barcode_prefix ? (
-                  <p className="text-rose-600 dark:text-rose-400 text-[11px] mt-1.5 font-medium">{formErrors.barcode_prefix}</p>
-                ) : (
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
-                    Strictly 7 prefix. 13-digit barcode format:{' '}
-                    <span className="font-mono font-bold text-blue-500 dark:text-blue-400">{formData.barcode_prefix || '9861234'}</span>{' '}
-                    (7D) + <span className="font-mono font-bold text-slate-700 dark:text-slate-300">9861234</span> (5D) +{' '}
-                    <span className="font-mono font-bold text-emerald-500 dark:text-emerald-400">Check Digit</span>
-                  </p>
-                )}
               </div>
 
               {/* purchase_prefix (Text, Required) */}

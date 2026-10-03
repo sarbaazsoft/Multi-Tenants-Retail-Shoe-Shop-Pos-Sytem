@@ -19,6 +19,13 @@ import {
   ShieldCheck,
   Sparkles,
   Lock,
+  UserCheck,
+  Users,
+  Eye,
+  EyeOff,
+  UserPlus,
+  SkipForward,
+  Info,
 } from 'lucide-react';
 import { api, setAuthSession } from '../../services/api';
 import { ShowroomBackground } from '../common/ShowroomBackground';
@@ -60,27 +67,34 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
   onCancel,
   isRequiredFirstLogin = false,
 }) => {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [alreadyCompleted, setAlreadyCompleted] = useState(false);
 
-  // 1. Invoice Prefix, Barcode Prefix / Settings & Inventory Defaults
-  const [invoicePrefix, setInvoicePrefix] = useState('INV-');
-  const [purchasePrefix, setPurchasePrefix] = useState('PUR-');
-  const [barcodePrefix, setBarcodePrefix] = useState('0108923');
-  const [lowStockLimit, setLowStockLimit] = useState(5);
-  const [pricingMode, setPricingMode] = useState<'FIXED' | 'NEGOTIABLE'>('FIXED');
-
-  // 2. Store Contact Details & Address
+  // 1. Store Identity & Administrator Account (Primary Store Owner - ADMIN)
   const [storeName, setStoreName] = useState('');
+  const [address, setAddress] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
 
-  // 3. Tax Rates, Currency & Receipt Footer Notes
+  // 2. Optional Cashier Account Setup (Default is SKIPPED - never created automatically!)
+  const [enableCashier, setEnableCashier] = useState(false);
+  const [cashierName, setCashierName] = useState('');
+  const [cashierEmail, setCashierEmail] = useState('');
+  const [cashierPhone, setCashierPhone] = useState('');
+  const [cashierPassword, setCashierPassword] = useState('');
+  const [showCashierPassword, setShowCashierPassword] = useState(false);
+
+  // 3. Document Prefixes, Tax Rates, Currency & POS Defaults
+  const [invoicePrefix, setInvoicePrefix] = useState('INV-');
+  const [purchasePrefix, setPurchasePrefix] = useState('PUR-');
+  const [lowStockLimit, setLowStockLimit] = useState(5);
+  const [pricingMode, setPricingMode] = useState<'FIXED' | 'NEGOTIABLE'>('FIXED');
   const [currency, setCurrency] = useState('PKR');
   const [taxRate, setTaxRate] = useState<number>(0);
   const [taxId, setTaxId] = useState('');
@@ -89,11 +103,10 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
     'Thank you for shopping with us! Exchanges accepted within 7 days with original receipt.'
   );
 
-  // 4. Optional PWA Brand Theme & Starter Catalog
+  // 4. PWA Branding & Optional Starter Footwear SKUs
   const [themeColor, setThemeColor] = useState('#7C3AED');
   const [backgroundColor, setBackgroundColor] = useState('#0F172A');
   const [logoUrl, setLogoUrl] = useState('/pwa-512x512.png');
-  const [adminPassword, setAdminPassword] = useState('');
   const [initialProducts, setInitialProducts] = useState<StarterProductInput[]>([]);
 
   useEffect(() => {
@@ -106,9 +119,9 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
         const t = res.tenant;
         if (t) {
           setStoreName(t.name || '');
-          setOwnerName(t.ownerName || 'Store Owner');
-          setOwnerEmail(t.ownerEmail || '');
-          setPhone(t.ownerPhone || '');
+          setOwnerName(t.ownerName || t.admin_name || '');
+          setOwnerEmail(t.ownerEmail || t.admin_email || '');
+          setPhone(t.ownerPhone || t.admin_phone || '');
           setAddress(t.address || '');
           setTaxId(t.taxId || '');
           setStrn(t.strn || '');
@@ -116,7 +129,6 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
           setCurrency(t.currency || 'PKR');
           setInvoicePrefix(t.invoicePrefix || 'INV-');
           setPurchasePrefix(t.purchasePrefix || 'PUR-');
-          setBarcodePrefix(t.barcodePrefix || '0108923');
           setInvoiceFooter(
             t.invoiceFooter ||
               'Thank you for shopping with us! Exchanges accepted within 7 days with original receipt.'
@@ -127,6 +139,9 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
           setBackgroundColor(t.backgroundColor || '#0F172A');
           setLogoUrl(t.logoUrl || '/pwa-512x512.png');
           setAlreadyCompleted(Boolean(t.onboardingCompleted || (t as any).isLocked));
+          if (t.hasCashier) {
+            setEnableCashier(true);
+          }
         }
       })
       .catch((err) => {
@@ -178,25 +193,37 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
     setSaving(true);
     setError(null);
     try {
+      const willCreateCashier =
+        enableCashier &&
+        cashierEmail.trim().length > 0 &&
+        cashierPassword.trim().length > 0;
+
       const res = await api.saas.completeOnboarding(slug, {
         storeName: toTitleCaseTrimmed(storeName),
         address: toTitleCaseTrimmed(address),
         phone: phone.trim(),
         email: toLowerTrimmed(ownerEmail),
+        ownerName: toTitleCaseTrimmed(ownerName),
+        adminPassword: adminPassword.trim() || undefined,
+        // Cashier account (Only created if explicitly enabled and filled; if skipped, false is sent and no cashier is created):
+        createCashier: willCreateCashier,
+        cashierName: willCreateCashier ? toTitleCaseTrimmed(cashierName) : undefined,
+        cashierEmail: willCreateCashier ? toLowerTrimmed(cashierEmail) : undefined,
+        cashierPhone: willCreateCashier ? cashierPhone.trim() : undefined,
+        cashierPassword: willCreateCashier ? cashierPassword.trim() : undefined,
+        // POS & Accounting Defaults:
         taxId: taxId.trim(),
         strn: strn.trim(),
         taxRate,
         currency,
         invoicePrefix: invoicePrefix.trim(),
         purchasePrefix: purchasePrefix.trim(),
-        barcodePrefix: barcodePrefix.trim(),
         invoiceFooter: toTitleCaseTrimmed(invoiceFooter),
         lowStockLimit,
         pricingMode,
         themeColor,
         backgroundColor,
         logoUrl,
-        adminPassword: adminPassword.trim() || undefined,
         initialProducts: initialProducts
           .filter((p) => p.name.trim().length > 0)
           .map((p) => ({
@@ -292,7 +319,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                     {storeName || slug}
                   </div>
                   <div className="text-xs font-mono text-purple-600 dark:text-purple-300 truncate">
-                    {ownerName}
+                    /{slug}
                   </div>
                   {phone && (
                     <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
@@ -303,7 +330,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
 
                 <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800 space-y-1.5">
                   <div className="flex items-center justify-between text-[11px] font-mono font-bold uppercase text-slate-500 dark:text-slate-400">
-                    <span>Document &amp; Barcode Prefixes</span>
+                    <span>Document Prefixes &amp; Barcode</span>
                     <Lock className="w-3.5 h-3.5 text-amber-500" />
                   </div>
                   <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">
@@ -311,7 +338,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                     <span className="text-purple-600 dark:text-purple-300">{purchasePrefix}</span>
                   </div>
                   <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">
-                    Barcode Prefix: <span className="text-emerald-600 dark:text-emerald-400">{barcodePrefix}</span>
+                    Barcode Standard: <span className="text-emerald-600 dark:text-emerald-400">Code-128</span>
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">
                     Low Stock Alert: {lowStockLimit} Pairs
@@ -366,13 +393,13 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                     </div>
                     <div>
                       <div className="text-xs font-mono font-semibold text-purple-600 dark:text-purple-300">
-                        Welcome, {ownerName}
+                        Store Onboarding &bull; /{slug}
                       </div>
                       <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
                         Initial Store Setup &amp; POS Defaults
                       </h1>
                       <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                        Configure your store&apos;s invoice &amp; barcode prefixes, contact address, and tax/receipt rules to unlock your full Owner Portal (Staff Management, Catalog, Sales, Returns &amp; Purchases).
+                        Configure your store administrator account, optional cashier staff, document prefixes, and tax/receipt rules to unlock your Owner Portal.
                       </p>
                     </div>
                   </div>
@@ -388,25 +415,31 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                   )}
                 </div>
 
-                {/* 3-Step Interactive Progress Tabs */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-5 pt-5 border-t border-slate-200/80 dark:border-purple-900/50">
+                {/* 4-Step Interactive Progress Tabs */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 mt-5 pt-5 border-t border-slate-200/80 dark:border-purple-900/50">
                   {[
                     {
                       num: 1,
-                      title: '1. Invoices, Barcodes & Contact',
-                      subtitle: 'Prefixes, Address & Phone',
-                      icon: Barcode,
+                      title: '1. Store & Admin Account',
+                      subtitle: 'Master Administrator User',
+                      icon: UserCheck,
                     },
                     {
                       num: 2,
-                      title: '2. Taxes & Receipt Footer',
-                      subtitle: 'Tax Rate, NTN/STRN & Notes',
-                      icon: ReceiptText,
+                      title: '2. Cashier Setup (Optional)',
+                      subtitle: enableCashier ? 'Cashier Configured' : 'Counter Staff or Skip',
+                      icon: Users,
                     },
                     {
                       num: 3,
-                      title: '3. Branding & Quick Launch',
-                      subtitle: 'PWA Theme & Optional SKUs',
+                      title: '3. Invoices, Taxes & Receipts',
+                      subtitle: 'Prefixes, NTN & Policies',
+                      icon: ReceiptText,
+                    },
+                    {
+                      num: 4,
+                      title: '4. Branding & Quick Launch',
+                      subtitle: 'PWA Theme & Starter SKUs',
                       icon: Palette,
                     },
                   ].map((s) => {
@@ -417,7 +450,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                       <button
                         key={s.num}
                         type="button"
-                        onClick={() => setStep(s.num as 1 | 2 | 3)}
+                        onClick={() => setStep(s.num as 1 | 2 | 3 | 4)}
                         className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
                           active
                             ? 'bg-purple-50/90 dark:bg-purple-950/50 border-purple-500 shadow-sm'
@@ -458,26 +491,395 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                 onSubmit={handleFinishOnboarding}
                 className="app-card bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-purple-200/80 dark:border-purple-800/80 rounded-2xl sm:rounded-3xl p-6 sm:p-8 shadow-2xl text-slate-900 dark:text-slate-100"
               >
-                {/* STEP 1: INVOICE PREFIX, BARCODE SETTINGS & STORE CONTACT / ADDRESS */}
+                {/* STEP 1: STORE DETAILS & MASTER ADMINISTRATOR ACCOUNT */}
                 {step === 1 && (
                   <div className="space-y-6">
                     <div>
                       <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                        <Barcode className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                        <span>Invoice Prefix, Barcode Settings &amp; Store Contact Details</span>
+                        <UserCheck className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                        <span>Store Identity &amp; Master Administrator Account</span>
                       </h2>
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        Configure numbering prefixes for POS sales/purchases, barcode generation defaults, and your store&apos;s physical address.
+                        During store creation, only one primary Administrator account is created. Configure your store name, physical address, and master admin credentials below:
                       </p>
                     </div>
 
-                    {/* Numbering & Barcode Settings */}
+                    {/* Store Physical Identity */}
                     <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/90 dark:bg-slate-950/60 border border-slate-200/80 dark:border-purple-900/40 space-y-4">
-                      <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">
-                        Document &amp; Barcode Prefixes
+                      <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5" />
+                        <span>Store Basic Information</span>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Store Name *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={storeName}
+                            onChange={(e) => setStoreName(toTitleCaseLive(e.target.value))}
+                            placeholder="Apex Footwear"
+                            className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Store Domain Subdomain
+                          </label>
+                          <div className="px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-purple-600 dark:text-purple-300 text-sm font-mono font-bold">
+                            /{slug}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Store Physical Address (Printed on Receipts) *
+                        </label>
+                        <div className="relative">
+                          <MapPin className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                          <textarea
+                            rows={2}
+                            required
+                            value={address}
+                            onChange={(e) => setAddress(toTitleCaseLive(e.target.value))}
+                            placeholder="Shop #14, Ground Floor, Dolmen Mall Clifton, Karachi"
+                            className="app-input capitalize w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Master Administrator Account (Only 1 Account Created) */}
+                    <div className="p-4 sm:p-5 rounded-2xl bg-purple-50/50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                          <ShieldCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                          <span>Store Administrator Account (ADMIN)</span>
+                        </div>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 border border-purple-200 dark:border-purple-700 text-purple-800 dark:text-purple-200 text-[11px] font-mono font-bold">
+                          Single Master Account
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        This is your primary login credential. The Store Admin has unrestricted access to reporting, financial summaries, sales history, inventory purchases, and staff management.
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Administrator Full Name *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={ownerName}
+                            onChange={(e) => setOwnerName(toTitleCaseLive(e.target.value))}
+                            placeholder="e.g. Talhah Jan"
+                            className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Administrator Login Email *
+                          </label>
+                          <div className="relative">
+                            <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="email"
+                              required
+                              value={ownerEmail}
+                              onChange={(e) => setOwnerEmail(e.target.value)}
+                              placeholder="admin@shoepos.com"
+                              className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Contact Phone Number
+                          </label>
+                          <div className="relative">
+                            <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="text"
+                              value={phone}
+                              onChange={(e) => setPhone(e.target.value)}
+                              placeholder="+92 300 1234567"
+                              className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Administrator Password (Optional: Leave blank to keep current)
+                          </label>
+                          <div className="relative">
+                            <input
+                              type={showAdminPassword ? 'text' : 'password'}
+                              value={adminPassword}
+                              onChange={(e) => setAdminPassword(e.target.value)}
+                              placeholder="Set master store password"
+                              className="app-input w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowAdminPassword(!showAdminPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                            >
+                              {showAdminPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                      <button
+                        type="submit"
+                        disabled={saving}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>{saving ? 'Saving...' : 'Save & Launch Portal Now'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStep(2)}
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer"
+                      >
+                        <span>Next: Cashier Account Setup (Optional)</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 2: OPTIONAL CASHIER ACCOUNT SETUP (CAN BE SKIPPED!) */}
+                {step === 2 && (
+                  <div className="space-y-6">
+                    <div>
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-[11px] font-mono font-bold mb-1.5">
+                        <Users className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                        <span>Optional Counter Staff Setup</span>
+                      </div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Users className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                        <span>Add Cashier Account (Optional)</span>
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Cashier accounts are restricted to POS barcode checkout, billing, and receipt printing without access to business profits or settings. <strong>If you skip this step, no cashier account will be created automatically.</strong>
+                      </p>
+                    </div>
+
+                    {/* Toggle / Skip Banner */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div
+                        onClick={() => setEnableCashier(false)}
+                        className={`p-4 rounded-2xl border transition cursor-pointer ${
+                          !enableCashier
+                            ? 'bg-purple-50/80 dark:bg-purple-950/40 border-purple-500 shadow-sm ring-1 ring-purple-500/20'
+                            : 'bg-slate-50/70 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 opacity-90'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-mono font-bold uppercase text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                            <SkipForward className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                            <span>Skip Cashier Setup (Recommended)</span>
+                          </span>
+                          {!enableCashier && <CheckCircle2 className="w-4 h-4 text-purple-600 dark:text-purple-400" />}
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                          Do not create a cashier account right now. Only your Store Owner / Admin account will be active. You can create cashier accounts anytime later from <strong>Settings &rarr; Staff</strong>.
+                        </p>
+                      </div>
+
+                      <div
+                        onClick={() => setEnableCashier(true)}
+                        className={`p-4 rounded-2xl border transition cursor-pointer ${
+                          enableCashier
+                            ? 'bg-purple-50/80 dark:bg-purple-950/40 border-purple-500 shadow-sm ring-1 ring-purple-500/20'
+                            : 'bg-slate-50/70 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 opacity-90'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-mono font-bold uppercase text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                            <UserPlus className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                            <span>Add Cashier Account Now</span>
+                          </span>
+                          {enableCashier && <CheckCircle2 className="w-4 h-4 text-purple-600 dark:text-purple-400" />}
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                          Provision a dedicated counter staff account with restricted billing-only privileges right now.
+                        </p>
+                      </div>
+                    </div>
+
+                    {!enableCashier ? (
+                      <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-3 text-xs text-emerald-800 dark:text-emerald-300">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                        <div>
+                          <strong>Cashier Account Skipped:</strong> Only your Store Owner / Admin account (<code>{ownerEmail || 'admin'}</code>) will be created. No cashier account will be generated automatically.
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/90 dark:bg-slate-950/60 border border-purple-200 dark:border-purple-800/60 space-y-4">
+                        <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Cashier Account Details</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Cashier Full Name *
+                            </label>
+                            <input
+                              type="text"
+                              value={cashierName}
+                              onChange={(e) => setCashierName(toTitleCaseLive(e.target.value))}
+                              placeholder="e.g. Counter Cashier 1"
+                              className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Cashier Email / Login ID *
+                            </label>
+                            <div className="relative">
+                              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                              <input
+                                type="email"
+                                value={cashierEmail}
+                                onChange={(e) => setCashierEmail(e.target.value)}
+                                placeholder={`cashier@${slug}.com`}
+                                className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Cashier Phone Number (Optional)
+                            </label>
+                            <div className="relative">
+                              <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                              <input
+                                type="text"
+                                value={cashierPhone}
+                                onChange={(e) => setCashierPhone(e.target.value)}
+                                placeholder="+92 300 0000000"
+                                className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Cashier Password *
+                            </label>
+                            <div className="relative">
+                              <input
+                                type={showCashierPassword ? 'text' : 'password'}
+                                value={cashierPassword}
+                                onChange={(e) => setCashierPassword(e.target.value)}
+                                placeholder="Enter cashier password"
+                                className="app-input w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowCashierPassword(!showCashierPassword)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                              >
+                                {showCashierPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEnableCashier(false);
+                              setCashierEmail('');
+                              setCashierPassword('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 underline cursor-pointer"
+                          >
+                            Skip cashier setup instead &rarr;
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200/80 dark:border-purple-900/40">
+                      <button
+                        type="button"
+                        onClick={() => setStep(1)}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        <span>Back to Store &amp; Admin</span>
+                      </button>
+
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          type="submit"
+                          disabled={saving}
+                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>{saving ? 'Saving...' : 'Save & Launch Portal Now'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStep(3)}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer"
+                        >
+                          <span>Next: Invoices, Taxes &amp; Receipts</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3: DOCUMENT PREFIXES, TAXES & RECEIPT FOOTER */}
+                {step === 3 && (
+                  <div className="space-y-6">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Barcode className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                        <span>Document Prefixes, Inventory Defaults &amp; Taxes</span>
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Configure numbering prefixes for sales/purchases, stock alert thresholds, pricing policies, and receipt notes.
+                      </p>
+                    </div>
+
+                    {/* Numbering & POS Settings */}
+                    <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/90 dark:bg-slate-950/60 border border-slate-200/80 dark:border-purple-900/40 space-y-4">
+                      <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">
+                        Document Prefixes &amp; Inventory Defaults
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                             Invoice Prefix *
@@ -492,23 +894,6 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                           />
                           <span className="text-[10.5px] text-slate-500 dark:text-slate-400 mt-1 block">
                             Example: <code className="font-mono">{invoicePrefix || 'INV-'}00001</code>
-                          </span>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Barcode Prefix *
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={barcodePrefix}
-                            onChange={(e) => setBarcodePrefix(e.target.value)}
-                            placeholder="0108923"
-                            className="app-input w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
-                          />
-                          <span className="text-[10.5px] text-slate-500 dark:text-slate-400 mt-1 block">
-                            Used for auto-generated shoe SKU labels
                           </span>
                         </div>
 
@@ -561,207 +946,106 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                       </div>
                     </div>
 
-                    {/* Store Contact Details & Address */}
+                    {/* Tax & Currency */}
                     <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/90 dark:bg-slate-950/60 border border-slate-200/80 dark:border-purple-900/40 space-y-4">
                       <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
-                        <Building2 className="w-3.5 h-3.5" />
-                        <span>Store Contact Details &amp; Physical Address</span>
+                        <ReceiptText className="w-3.5 h-3.5" />
+                        <span>Currency, Taxes &amp; Receipt Footer</span>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Store Name *
+                            Store Currency *
+                          </label>
+                          <select
+                            value={currency}
+                            onChange={(e) => setCurrency(e.target.value)}
+                            className="app-input w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                          >
+                            <option value="PKR">PKR (Rs. — Pakistani Rupee)</option>
+                            <option value="USD">USD ($ — US Dollar)</option>
+                            <option value="AED">AED (AED — UAE Dirham)</option>
+                            <option value="SAR">SAR (SAR — Saudi Riyal)</option>
+                            <option value="GBP">GBP (£ — British Pound)</option>
+                            <option value="EUR">EUR (€ — Euro)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Sales Tax / GST Rate (%)
+                          </label>
+                          <div className="relative">
+                            <Percent className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              step="0.5"
+                              value={taxRate}
+                              onChange={(e) => setTaxRate(Math.max(0, Number(e.target.value) || 0))}
+                              placeholder="0"
+                              className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Tax ID / NTN Number
                           </label>
                           <input
                             type="text"
-                            required
-                            value={storeName}
-                            onChange={(e) => setStoreName(toTitleCaseLive(e.target.value))}
-                            placeholder="Apex Footwear"
-                            className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
+                            value={taxId}
+                            onChange={(e) => setTaxId(e.target.value)}
+                            placeholder="NTN-4829104-7"
+                            className="app-input w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
                           />
                         </div>
 
                         <div>
                           <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Store Contact Phone *
+                            STRN / Sales Tax Registration No.
                           </label>
-                          <div className="relative">
-                            <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                            <input
-                              type="text"
-                              required
-                              value={phone}
-                              onChange={(e) => setPhone(e.target.value)}
-                              placeholder="+92 300 1234567"
-                              className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Official Store Email
-                          </label>
-                          <div className="relative">
-                            <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                            <input
-                              type="email"
-                              value={ownerEmail}
-                              onChange={(e) => setOwnerEmail(e.target.value)}
-                              placeholder="Enter official store email"
-                              className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Store Physical Address (Printed on Receipts) *
-                        </label>
-                        <div className="relative">
-                          <MapPin className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                          <textarea
-                            rows={2}
-                            required
-                            value={address}
-                            onChange={(e) => setAddress(toTitleCaseLive(e.target.value))}
-                            placeholder="Shop #14, Ground Floor, Dolmen Mall Clifton, Karachi"
-                            className="app-input capitalize w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                      <button
-                        type="submit"
-                        disabled={saving}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition cursor-pointer"
-                      >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>{saving ? 'Saving...' : 'Save & Launch Portal Now'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setStep(2)}
-                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer"
-                      >
-                        <span>Next: Tax Rates &amp; Receipt Footer</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* STEP 2: TAX RATES, CURRENCY & RECEIPT FOOTER NOTES */}
-                {step === 2 && (
-                  <div className="space-y-6">
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                        <ReceiptText className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                        <span>Tax Rates, Currency &amp; Receipt Footer Notes</span>
-                      </h2>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        Configure tax percentages, registration numbers, currency, and custom return/exchange notes printed at the bottom of every customer receipt.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Store Currency *
-                        </label>
-                        <select
-                          value={currency}
-                          onChange={(e) => setCurrency(e.target.value)}
-                          className="app-input w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
-                        >
-                          <option value="PKR">PKR (Rs. — Pakistani Rupee)</option>
-                          <option value="USD">USD ($ — US Dollar)</option>
-                          <option value="AED">AED (AED — UAE Dirham)</option>
-                          <option value="SAR">SAR (SAR — Saudi Riyal)</option>
-                          <option value="GBP">GBP (£ — British Pound)</option>
-                          <option value="EUR">EUR (€ — Euro)</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Sales Tax / GST Rate (%)
-                        </label>
-                        <div className="relative">
-                          <Percent className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                           <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            step="0.5"
-                            value={taxRate}
-                            onChange={(e) => setTaxRate(Math.max(0, Number(e.target.value) || 0))}
-                            placeholder="0"
-                            className="app-input w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                            type="text"
+                            value={strn}
+                            onChange={(e) => setStrn(e.target.value)}
+                            placeholder="STRN-327789012"
+                            className="app-input w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
                           />
                         </div>
                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Tax ID / NTN Number
-                        </label>
-                        <input
-                          type="text"
-                          value={taxId}
-                          onChange={(e) => setTaxId(e.target.value)}
-                          placeholder="NTN-4829104-7"
-                          className="app-input w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
-                        />
-                      </div>
 
                       <div>
                         <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          STRN / Sales Tax Registration No.
+                          Receipt Footer Notes &amp; Exchange Policy *
                         </label>
-                        <input
-                          type="text"
-                          value={strn}
-                          onChange={(e) => setStrn(e.target.value)}
-                          placeholder="STRN-327789012"
-                          className="app-input w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm font-mono"
+                        <textarea
+                          rows={3}
+                          required
+                          value={invoiceFooter}
+                          onChange={(e) => setInvoiceFooter(toTitleCaseLive(e.target.value))}
+                          placeholder="Thank you for shopping with us! Exchanges accepted within 7 days with original receipt."
+                          className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
                         />
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
+                          Printed automatically at the bottom of every thermal POS receipt.
+                        </span>
                       </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Receipt Footer Notes &amp; Exchange Policy *
-                      </label>
-                      <textarea
-                        rows={3}
-                        required
-                        value={invoiceFooter}
-                        onChange={(e) => setInvoiceFooter(toTitleCaseLive(e.target.value))}
-                        placeholder="Thank you for shopping with us! Exchanges accepted within 7 days with original receipt."
-                        className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm"
-                      />
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-                        Printed automatically at the bottom of every thermal POS receipt.
-                      </span>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200/80 dark:border-purple-900/40">
                       <button
                         type="button"
-                        onClick={() => setStep(1)}
+                        onClick={() => setStep(2)}
                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
                       >
                         <ArrowLeft className="w-4 h-4" />
-                        <span>Back</span>
+                        <span>Back to Cashier Setup</span>
                       </button>
 
                       <div className="flex items-center gap-2.5">
@@ -776,7 +1060,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
 
                         <button
                           type="button"
-                          onClick={() => setStep(3)}
+                          onClick={() => setStep(4)}
                           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer"
                         >
                           <span>Next: Branding &amp; Catalog</span>
@@ -787,8 +1071,8 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                   </div>
                 )}
 
-                {/* STEP 3: OPTIONAL PWA BRANDING & STARTER FOOTWEAR CATALOG */}
-                {step === 3 && (
+                {/* STEP 4: OPTIONAL PWA BRANDING & STARTER FOOTWEAR CATALOG */}
+                {step === 4 && (
                   <div className="space-y-6">
                     <div>
                       <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -890,7 +1174,7 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                           <div className="text-white min-w-0">
                             <div className="font-bold text-sm truncate">{storeName || slug}</div>
                             <div className="text-[11px] opacity-90 font-mono truncate">
-                              Invoice: {invoicePrefix}00001 • Barcode: {barcodePrefix}
+                              Invoice: {invoicePrefix}00001 • Purchase: {purchasePrefix}0001
                             </div>
                             <div className="text-[11px] opacity-90 font-mono truncate">
                               Tax: {taxRate}% • Currency: {currency}
@@ -1025,11 +1309,11 @@ export const TenantOnboardingWizard: React.FC<TenantOnboardingWizardProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200/80 dark:border-purple-900/40">
                       <button
                         type="button"
-                        onClick={() => setStep(2)}
+                        onClick={() => setStep(3)}
                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
                       >
                         <ArrowLeft className="w-4 h-4" />
-                        <span>Back</span>
+                        <span>Back to Invoices &amp; Taxes</span>
                       </button>
 
                       <button

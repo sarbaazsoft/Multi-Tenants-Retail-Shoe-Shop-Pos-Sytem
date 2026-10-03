@@ -30,8 +30,7 @@ import { playAudioFeedback } from '../../utils/audio.ts';
 import { SideEndBoxLabelModal } from './SideEndBoxLabelModal.tsx';
 import { BarcodeStickerModal } from './BarcodeStickerModal.tsx';
 import {
-  generateEan13Barcode,
-  validateBarcodePrefix,
+  generateCode128Barcode,
   analyzeBarcode,
 } from '../../utils/barcode.ts';
 import {
@@ -39,6 +38,8 @@ import {
   parseCategoryPrefix,
   generateSuggestedArticle,
   generateSku,
+  STANDARD_FOOTWEAR_CATEGORIES,
+  normalizeFootwearCategory,
 } from '../../utils/sku.ts';
 import { BarcodeSvg } from '../common/BarcodeSvg.tsx';
 import { AiProductSuggester } from './AiProductSuggester.tsx';
@@ -73,6 +74,15 @@ interface BarcodeValidationState {
   error?: string;
 }
 
+interface ArticleSkuValidationState {
+  status: 'idle' | 'checking' | 'valid' | 'invalid';
+  isDuplicate?: boolean;
+  duplicateField?: 'article' | 'sku';
+  existingProduct?: any;
+  message?: string;
+  error?: string;
+}
+
 export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   product,
   companySettings,
@@ -81,7 +91,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 }) => {
   const [currentStep, setCurrentStep] = useState<WizardStep>(1);
   const [brands, setBrands] = useState<string[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>(STANDARD_FOOTWEAR_CATEGORIES);
   const [liveSettings, setLiveSettings] = useState<any>(companySettings);
 
   useEffect(() => {
@@ -92,21 +102,22 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
   const effectiveSettings = liveSettings || companySettings || {};
 
-  // 7-digit prefix directly from Settings
-  const rawPrefix = effectiveSettings?.barcode_prefix || effectiveSettings?.barcodePrefix || '0108923';
-  const prefixValidation = validateBarcodePrefix(rawPrefix);
-  const prefix = String(rawPrefix).replace(/\D/g, '');
-
   // Step 1: Product Classification State (Stored directly as plain text string fields)
   const [brand, setBrand] = useState<string>(product?.brand || product?.brandName || 'Local');
-  const [category, setCategory] = useState<string>(product?.category || product?.categoryName || 'Casual Shoes');
-  const [nextProductId, setNextProductId] = useState<number>(product?.id || 1);
-  const effectiveProductId = product?.id || nextProductId;
+  const [category, setCategory] = useState<string>(() =>
+    normalizeFootwearCategory(product?.category || product?.categoryName || 'Men')
+  );
+  const [nextProductId, setNextProductId] = useState<number>(
+    product?.tenantProductNo || product?.tenant_product_no || product?.id || 1
+  );
+  const effectiveProductId =
+    product?.tenantProductNo || product?.tenant_product_no || product?.id || nextProductId;
 
   // Step 2 & 3: Article & SKU (Auto-suggested from classification, fully editable in Step 3 like Barcode)
   const [article, setArticle] = useState<string>(product?.article || '');
-  const [isArticleManuallyEdited, setIsArticleManuallyEdited] = useState<boolean>(false);
+  const [isArticleManuallyEdited, setIsArticleManuallyEdited] = useState<boolean>(Boolean(product?.article));
   const [sku, setSku] = useState<string>(product?.sku || '');
+  const [articleSkuValidation, setArticleSkuValidation] = useState<ArticleSkuValidationState>({ status: 'idle' });
   const [isSideEndLabelOpen, setIsSideEndLabelOpen] = useState(false);
   const [isBarcodeStickerOpen, setIsBarcodeStickerOpen] = useState(false);
 
@@ -188,8 +199,9 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
   const [pricingFieldErrors, setPricingFieldErrors] = useState<Record<string, string>>({});
 
-  // Step 3: Barcode (Fully editable for imported / external manufacturer box barcodes or store EAN-13)
+  // Step 3: Barcode (Fully editable for imported / external manufacturer box barcodes or store Code-128)
   const [barcode, setBarcode] = useState<string>(product?.barcode || '');
+  const [isBarcodeManuallyEdited, setIsBarcodeManuallyEdited] = useState<boolean>(Boolean(product?.barcode));
   const [barcodeValidation, setBarcodeValidation] = useState<BarcodeValidationState>({ status: 'idle' });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -230,10 +242,10 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const currentBrandName = brand.trim() || 'Local';
   const currentBrandPrefix = parseBrandPrefix(currentBrandName);
 
-  const currentCategoryName = category.trim() || 'Casual Shoes';
+  const currentCategoryName = category.trim() || 'Men';
   const currentCategoryPrefix = parseCategoryPrefix(currentCategoryName);
 
-  // Helper to recompute article and SKU based on classification
+  // Helper to recompute article, SKU, and default Code-128 barcode based on classification
   const updateClassificationCodes = (
     targetBrand = brand,
     targetCat = category,
@@ -241,16 +253,24 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
     forceResetArticle = false
   ) => {
     const brandPfx = parseBrandPrefix(targetBrand || 'Local');
-    const catPfx = parseCategoryPrefix(targetCat || 'Casual Shoes');
+    const catPfx = parseCategoryPrefix(targetCat || 'Men');
 
+    const storeStandardArticle = generateSuggestedArticle(catPfx, pId);
     const designedArticle =
       !forceResetArticle && isArticleManuallyEdited && article.trim()
         ? article.trim().toUpperCase()
-        : generateSuggestedArticle(catPfx, pId);
-    const designedSku = generateSku(brandPfx, designedArticle, pId);
+        : storeStandardArticle;
+    // SKU always uses the store's standard classification identifier so manual Article edits never alter SKU
+    const designedSku = product?.sku
+      ? String(product.sku).toUpperCase()
+      : generateSku(brandPfx, storeStandardArticle, pId);
 
     setArticle(designedArticle);
     setSku(designedSku);
+    if (!isBarcodeManuallyEdited && !product) {
+      const designedBarcode = generateCode128Barcode(pId, catPfx).barcode;
+      setBarcode(designedBarcode);
+    }
     if (!productName || productName.toUpperCase() === article.toUpperCase()) {
       setProductName(designedArticle);
     }
@@ -263,38 +283,24 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   };
 
   const handleCategoryChange = (newCat: string) => {
-    const formatted = toTitleCaseLive(newCat);
+    const formatted = normalizeFootwearCategory(newCat);
     setCategory(formatted);
     updateClassificationCodes(brand, formatted, effectiveProductId);
   };
 
   const handleArticleChange = (rawVal: string) => {
+    // Strictly update ONLY Article; never alter SKU, Barcode, or Product ID
     const nextArticle = rawVal.toUpperCase();
-    const prevArticle = article;
     setIsArticleManuallyEdited(true);
     setArticle(nextArticle);
-    const cleanNext = nextArticle.trim();
-    const nextSku = cleanNext
-      ? generateSku(currentBrandPrefix || 'LOC', cleanNext, effectiveProductId)
-      : '';
-    setSku(nextSku);
-    if (!productName || productName.trim().toUpperCase() === prevArticle.trim().toUpperCase()) {
-      setProductName(cleanNext);
-    }
   };
 
   const handleResetStoreArticle = () => {
     setErrorMessage(null);
     setIsArticleManuallyEdited(false);
-    const catPfx = currentCategoryPrefix || 'CA';
+    const catPfx = currentCategoryPrefix || 'MN';
     const designedArticle = generateSuggestedArticle(catPfx, effectiveProductId);
-    const designedSku = generateSku(currentBrandPrefix || 'LOC', designedArticle, effectiveProductId);
-    const prevArticle = article;
     setArticle(designedArticle);
-    setSku(designedSku);
-    if (!productName || productName.trim().toUpperCase() === prevArticle.trim().toUpperCase()) {
-      setProductName(designedArticle);
-    }
   };
 
   useEffect(() => {
@@ -313,7 +319,8 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
           }
         } catch (_) {}
 
-        let currentId = product?.id || 1;
+        let currentId =
+          product?.tenantProductNo || product?.tenant_product_no || product?.id || 1;
 
         // Fetch next product sequence ID if adding new product
         if (!product) {
@@ -328,36 +335,51 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
           }
         }
 
-        // Fetch existing distinct brands and categories from database products for autocomplete suggestions
+        // Fetch existing distinct brands and fixed pre-saved categories from store
         try {
           const [bRes, cRes] = await Promise.all([
             api.brandCategory.getBrands(),
             api.brandCategory.getCategories(),
           ]);
-          const brandList = (bRes?.brands || []).map((b: any) => (typeof b === 'string' ? b : b.name)).filter(Boolean);
-          const catList = (cRes?.categories || []).map((c: any) => (typeof c === 'string' ? c : c.name)).filter(Boolean);
+          const brandList = Array.from(
+            new Set(
+              (bRes?.brands || [])
+                .map((b: any) => (typeof b === 'string' ? b : b.name)?.trim())
+                .filter(Boolean)
+            )
+          );
+          const rawCatList = (cRes?.categories || [])
+            .map((c: any) => normalizeFootwearCategory(typeof c === 'string' ? c : c.name))
+            .filter(Boolean);
+          const mergedCategories = Array.from(new Set([...STANDARD_FOOTWEAR_CATEGORIES, ...rawCatList]));
 
           if (isMounted) {
             setBrands(brandList);
-            setCategories(catList);
+            setCategories(mergedCategories);
           }
         } catch (e) {
           console.warn('Could not load brand/category suggestions:', e);
+          if (isMounted) {
+            setCategories(STANDARD_FOOTWEAR_CATEGORIES);
+          }
         }
 
         if (!product && isMounted) {
-          updateClassificationCodes(brand || 'Local', category || 'Casual Shoes', currentId);
+          updateClassificationCodes(brand || 'Local', category || 'Men', currentId);
 
-          // Pre-fill the barcode input with the designed store standard EAN-13 barcode
+          // Pre-fill the barcode input with the designed store Code-128 barcode (no prefix, no zero-padding)
           try {
-            const barcodeRes = await api.products.generateBarcode(currentId);
+            const barcodeRes = await api.products.generateBarcode({
+              productId: currentId,
+              category: category || 'Men',
+            });
             if (barcodeRes?.barcode && isMounted) {
               setBarcode(barcodeRes.barcode);
             }
           } catch (err) {
-            if (prefixValidation.isValid && currentId <= 99999 && isMounted) {
+            if (isMounted) {
               try {
-                const gen = generateEan13Barcode(prefix, currentId);
+                const gen = generateCode128Barcode(currentId, category || 'Men');
                 setBarcode(gen.barcode);
               } catch (_) {}
             }
@@ -384,6 +406,52 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
     }
   }, [currentStep]);
 
+  // Real-time Article & SKU Uniqueness Validation effect
+  useEffect(() => {
+    const cleanArt = article.trim().toUpperCase();
+    const cleanSkuVal = sku.trim().toUpperCase();
+
+    if (!cleanArt) {
+      setArticleSkuValidation({
+        status: 'invalid',
+        error: 'Article code is required for product identification and box labels.',
+      });
+      return;
+    }
+
+    setArticleSkuValidation({
+      status: 'checking',
+      message: 'Checking Article & SKU uniqueness in store catalog...',
+    });
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.products.validateArticle(cleanArt, cleanSkuVal, product?.id);
+        if (!res.valid) {
+          setArticleSkuValidation({
+            status: 'invalid',
+            isDuplicate: res.isDuplicate,
+            duplicateField: res.duplicateField,
+            existingProduct: res.existingProduct,
+            error: res.error || 'Article or SKU already exists in this store.',
+          });
+        } else {
+          setArticleSkuValidation({
+            status: 'valid',
+            message: res.message || 'Article & SKU verified unique in catalog.',
+          });
+        }
+      } catch {
+        setArticleSkuValidation({
+          status: 'valid',
+          message: 'Article & SKU format ready.',
+        });
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [article, sku, product?.id]);
+
   // Real-time Barcode Validation effect (Format, Checksum, and DB Duplicate Check)
   useEffect(() => {
     const clean = barcode.trim();
@@ -393,7 +461,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
     }
 
     // Step 1: Instant local format & checksum validation
-    const local = analyzeBarcode(clean, prefix);
+    const local = analyzeBarcode(clean);
     if (!local.isValid) {
       setBarcodeValidation({
         status: 'invalid',
@@ -452,31 +520,28 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [barcode, prefix, product?.id]);
+  }, [barcode, product?.id]);
 
   const handleGenerateStoreBarcode = async () => {
     try {
       setErrorMessage(null);
-      const res = await api.products.generateBarcode(effectiveProductId);
+      setIsBarcodeManuallyEdited(false);
+      const res = await api.products.generateBarcode({
+        productId: effectiveProductId,
+        category: currentCategoryName,
+      });
       if (res?.barcode) {
         setBarcode(res.barcode);
       } else {
-        const gen = generateEan13Barcode(prefix, effectiveProductId);
+        const gen = generateCode128Barcode(effectiveProductId, currentCategoryPrefix);
         setBarcode(gen.barcode);
       }
     } catch (err: any) {
       try {
-        const fallback = await api.products.generateBarcode();
-        if (fallback?.barcode) {
-          setBarcode(fallback.barcode);
-          return;
-        }
-      } catch (_) {}
-      try {
-        const gen = generateEan13Barcode(prefix, effectiveProductId);
+        const gen = generateCode128Barcode(effectiveProductId, currentCategoryPrefix);
         setBarcode(gen.barcode);
       } catch (e: any) {
-        setErrorMessage('Could not generate store EAN-13 barcode: ' + (err.message || 'Please check barcode settings.'));
+        setErrorMessage('Could not generate store Code-128 barcode: ' + (err.message || 'Please check product details.'));
       }
     }
   };
@@ -557,12 +622,17 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       articleInputRef.current?.focus();
       return false;
     }
-    const clean = barcode.trim();
-    if (!clean) {
-      setErrorMessage('Please enter or scan a barcode, or click "Reset to Store EAN-13".');
+    if (articleSkuValidation.status === 'invalid') {
+      setErrorMessage(articleSkuValidation.error || 'Article or SKU already exists in this store.');
+      articleInputRef.current?.focus();
       return false;
     }
-    const local = analyzeBarcode(clean, prefix);
+    const clean = barcode.trim();
+    if (!clean) {
+      setErrorMessage('Please enter or scan a barcode, or click "Reset to Store Code-128".');
+      return false;
+    }
+    const local = analyzeBarcode(clean);
     if (!local.isValid) {
       setErrorMessage(local.error || 'Barcode validation failed.');
       return false;
@@ -626,7 +696,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       let cleanSku = sku.trim().toUpperCase();
 
       const finalBrand = toTitleCaseTrimmed(brand) || 'Local';
-      const finalCategory = toTitleCaseTrimmed(category) || 'Casual Shoes';
+      const finalCategory = normalizeFootwearCategory(category);
 
       // Ensure article is generated if not yet set
       if (!cleanArticle) {
@@ -634,10 +704,12 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
         cleanArticle = generateSuggestedArticle(catPfx, effectiveProductId).toUpperCase();
       }
 
-      // Ensure SKU is generated if not yet set
+      // Ensure SKU is generated if not yet set (always using store standard article so custom Article doesn't alter SKU)
       if (!cleanSku) {
         const brandPfx = parseBrandPrefix(finalBrand);
-        cleanSku = generateSku(brandPfx, cleanArticle, effectiveProductId).toUpperCase();
+        const catPfx = parseCategoryPrefix(finalCategory);
+        const stdArt = generateSuggestedArticle(catPfx, effectiveProductId).toUpperCase();
+        cleanSku = generateSku(brandPfx, stdArt, effectiveProductId).toUpperCase();
       }
 
       const finalBarcodeToSave = barcode.trim();
@@ -913,8 +985,8 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                           className="capitalize w-full px-3 py-2 bg-white dark:bg-purple-500/20 border border-gray-300 dark:border-purple-400/40 rounded-xl text-xs font-medium text-gray-900 dark:text-purple-200 hover:bg-slate-50 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] outline-none focus:border-indigo-600 dark:focus:border-purple-400 transition"
                         />
                         <datalist id="product-brand-datalist">
-                          {brands.map((bName) => (
-                            <option key={bName} value={bName} />
+                          {brands.map((bName, bIdx) => (
+                            <option key={`brand-dl-${bName}-${bIdx}`} value={bName} />
                           ))}
                         </datalist>
                       </div>
@@ -930,25 +1002,27 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Category Input with Autocomplete Datalist */}
+                  {/* Category Select (Pre-saved Store Categories) */}
                   <div>
                     <label className="block font-bold text-gray-800 dark:text-slate-200 text-xs mb-1.5">
                       Shoe Category <span className="text-red-500 dark:text-pink-400">*</span>
                     </label>
                     <div className="relative">
-                      <input
-                        type="text"
-                        list="product-category-datalist"
+                      <select
                         value={category}
                         onChange={(e) => handleCategoryChange(e.target.value)}
-                        placeholder="Type or select category (e.g. Casual Shoes, Sports Shoes)..."
-                        className="capitalize w-full px-3 py-2 bg-white dark:bg-purple-500/20 border border-gray-300 dark:border-purple-400/40 rounded-xl text-xs font-medium text-gray-900 dark:text-purple-200 hover:bg-slate-50 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] outline-none focus:border-indigo-600 dark:focus:border-purple-400 transition"
-                      />
-                      <datalist id="product-category-datalist">
-                        {categories.map((cName) => (
-                          <option key={cName} value={cName} />
+                        className="w-full px-3 py-2 bg-white dark:bg-purple-500/20 border border-gray-300 dark:border-purple-400/40 rounded-xl text-xs font-medium text-gray-900 dark:text-purple-200 hover:bg-slate-50 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] outline-none focus:border-indigo-600 dark:focus:border-purple-400 cursor-pointer transition"
+                      >
+                        {categories.map((cName, cIdx) => (
+                          <option
+                            key={`cat-opt-${cName}-${cIdx}`}
+                            value={cName}
+                            className="bg-white text-gray-900 dark:bg-[#120726] dark:text-purple-100"
+                          >
+                            {cName}
+                          </option>
                         ))}
-                      </datalist>
+                      </select>
                     </div>
                     <div className="flex items-center gap-1.5 mt-1.5">
                       <span className="text-[10px] text-gray-500 dark:text-slate-400 font-medium">Article Prefix (2-char):</span>
@@ -1442,7 +1516,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                       value={article}
                       onChange={(e) => handleArticleChange(e.target.value)}
                       className={`w-full pl-10 pr-28 py-3 bg-white dark:bg-[#070B14] border-2 rounded-xl font-mono font-bold text-base text-gray-900 dark:text-white outline-none transition shadow-xs uppercase ${
-                        article.trim().length > 0
+                        article.trim().length > 0 && articleSkuValidation.status !== 'invalid'
                           ? 'border-emerald-400 dark:border-emerald-500 focus:border-emerald-600 dark:focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 dark:focus:ring-emerald-950'
                           : 'border-red-400 dark:border-red-500 focus:border-red-600 dark:focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:ring-red-950'
                       }`}
@@ -1468,14 +1542,25 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                     </div>
                   </div>
 
-                  {/* REAL-TIME ARTICLE & LINKED SKU FEEDBACK */}
-                  {article.trim().length > 0 ? (
+                  {/* REAL-TIME ARTICLE & SKU UNIQUENESS FEEDBACK */}
+                  {articleSkuValidation.status === 'checking' && (
+                    <div className="alert-warning flex items-center gap-2.5 text-xs animate-in fade-in">
+                      <RefreshCw className="w-4 h-4 animate-spin text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>{articleSkuValidation.message || 'Checking Article & SKU uniqueness in store catalog...'}</span>
+                    </div>
+                  )}
+
+                  {article.trim().length > 0 && articleSkuValidation.status === 'valid' && (
                     <div className="alert-success flex flex-wrap items-center justify-between gap-2 text-xs animate-in fade-in">
                       <div className="flex items-center gap-2 text-emerald-950 dark:text-emerald-300 font-medium">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         <div>
                           <span className="font-bold text-emerald-900 dark:text-emerald-300 font-mono">
                             {article.trim().toUpperCase()}
+                          </span>
+                          <span className="mx-1.5 opacity-40">|</span>
+                          <span className="text-emerald-700 dark:text-emerald-400">
+                            Article &amp; SKU ({sku}) verified unique in catalog
                           </span>
                         </div>
                       </div>
@@ -1484,11 +1569,17 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                         <span>{isArticleManuallyEdited ? 'Custom Article' : 'Store Article'}</span>
                       </span>
                     </div>
-                  ) : (
+                  )}
+
+                  {(article.trim().length === 0 || articleSkuValidation.status === 'invalid') && (
                     <div className="alert-danger flex flex-wrap items-center justify-between gap-2 text-xs animate-in fade-in">
                       <div className="flex items-center gap-2 text-red-800 dark:text-red-300">
                         <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
-                        <span>Article code is required for product identification and box labels.</span>
+                        <span>
+                          {article.trim().length === 0
+                            ? 'Article code is required for product identification and box labels.'
+                            : articleSkuValidation.error || 'Article or SKU already exists in this store.'}
+                        </span>
                       </div>
                       <button
                         type="button"
@@ -1507,11 +1598,11 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <label className="font-bold text-gray-900 dark:text-slate-200 text-xs flex items-center gap-1.5">
-                        <span>Barcode Input (Validated &amp; Scannable)</span>
+                        <span>Barcode Input (Code-128 Default or Product Box Barcode)</span>
                         <span className="text-red-500">*</span>
                       </label>
                       <p className="text-[11px] text-gray-500 dark:text-slate-400">
-                        Pre-filled with designed store standard EAN-13. You can keep it, or scan/type an external manufacturer box barcode.
+                        Pre-filled with compact store Code-128 ({generateCode128Barcode(effectiveProductId, currentCategoryPrefix || 'CA').barcode}). Keep it or override with any manufacturer box barcode (Code-128, EAN-13, UPC-A, EAN-8).
                       </p>
                     </div>
 
@@ -1521,15 +1612,16 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                         type="button"
                         onClick={handleGenerateStoreBarcode}
                         className="px-2.5 py-1.5 bg-indigo-50 dark:bg-blue-950/50 hover:bg-indigo-100 dark:hover:bg-blue-900/60 text-indigo-600 dark:text-blue-400 rounded-lg font-semibold text-[11px] transition flex items-center gap-1 cursor-pointer border border-indigo-200 dark:border-blue-800/60"
-                        title="Auto-generate standard 13-digit EAN-13 using your store prefix"
+                        title="Reset to compact store Code-128 barcode (no prefix, exact product ID)"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-blue-400" />
-                        <span>Reset to Store EAN-13</span>
+                        <span>Reset to Store Code-128</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => {
+                          setIsBarcodeManuallyEdited(true);
                           setBarcode('');
                           setTimeout(() => barcodeInputRef.current?.focus(), 50);
                         }}
@@ -1548,9 +1640,13 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                       ref={barcodeInputRef}
                       type="text"
                       required
-                      placeholder="Scan box barcode with gun or type (e.g. 045242500123 or 0108923000018)..."
+                      placeholder={`Scan box barcode or use store Code-128 (e.g. ${generateCode128Barcode(effectiveProductId, currentCategoryPrefix || 'CA').barcode} or EAN/UPC)...`}
                       value={barcode}
-                      onChange={(e) => setBarcode(e.target.value.trim())}
+                      onChange={(e) => {
+                        // Strictly update ONLY barcode; never alter article, SKU, title, or product ID
+                        setIsBarcodeManuallyEdited(true);
+                        setBarcode(e.target.value.trim());
+                      }}
                       className={`w-full pl-10 pr-28 py-3 bg-white dark:bg-[#070B14] border-2 rounded-xl font-mono font-bold text-base text-gray-900 dark:text-white outline-none transition shadow-xs ${
                         barcodeValidation.status === 'valid'
                           ? 'border-emerald-400 dark:border-emerald-500 focus:border-emerald-600 dark:focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 dark:focus:ring-emerald-950'
@@ -1643,7 +1739,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                   {/* Standard Guidelines Footer */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-gray-500 dark:text-slate-400">
                     <span>
-                      Supported: Store EAN-13, International EAN-13, UPC-A (12D), EAN-8, and Code-128 box codes.
+                      Supported: Store Code-128, Box Code-128, EAN-13, UPC-A (12D), and EAN-8.
                     </span>
                     <span className="text-[10px] text-gray-400 dark:text-slate-500">
                       Auto-validated on type/scan
@@ -1777,7 +1873,12 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 <button
                   type="button"
                   onClick={handleConfirmAndSave}
-                  disabled={isSubmitting || barcodeValidation.status === 'invalid' || !article.trim()}
+                  disabled={
+                    isSubmitting ||
+                    barcodeValidation.status === 'invalid' ||
+                    articleSkuValidation.status === 'invalid' ||
+                    !article.trim()
+                  }
                   className="btn-primary px-6 py-2.5 text-xs flex items-center gap-1.5 cursor-pointer shadow-md font-bold disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />

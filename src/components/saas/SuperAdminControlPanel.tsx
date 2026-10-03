@@ -40,6 +40,12 @@ import {
   Trash2,
   RotateCcw,
   Copy,
+  BarChart3,
+  Award,
+  Users,
+  Layers,
+  Receipt,
+  ChevronDown,
 } from 'lucide-react';
 import { api, setAuthSession } from '../../services/api';
 import { ShowroomBackground } from '../common/ShowroomBackground';
@@ -48,9 +54,18 @@ import { PublicFooter } from '../common/PublicFooter';
 import { UserAvatar } from '../common/UserAvatar';
 import { ThemeDropdown } from '../common/ThemeDropdown';
 import { StatCard, triggerStatRecount } from '../common/StatCard';
+import { SuperAdminReportsView } from './SuperAdminReportsView';
 import { useTheme } from '../../context/ThemeContext';
 import { toTitleCaseLive, toTitleCaseTrimmed, toLowerTrimmed } from '../../utils/textFormat';
-import type { SuperAdminStoreRow, StoreRequestRecord, User } from '../../types';
+import type {
+  SuperAdminStoreRow,
+  StoreRequestRecord,
+  SuperAdminReportSku,
+  SuperAdminReportBreakdown,
+  SuperAdminSevenDayPoint,
+  SuperAdminRecentTransaction,
+  User,
+} from '../../types';
 
 interface SuperAdminControlPanelProps {
   currentUser: User | null;
@@ -61,7 +76,7 @@ interface SuperAdminControlPanelProps {
   onTenantsUpdated: () => void;
 }
 
-type SuperAdminTab = 'dashboard' | 'stores' | 'requests' | 'revenue' | 'manifests';
+type SuperAdminTab = 'dashboard' | 'stores' | 'requests' | 'reports' | 'manifests';
 
 export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
   currentUser,
@@ -130,6 +145,14 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
   });
   const [stores, setStores] = useState<SuperAdminStoreRow[]>([]);
   const [storeRequests, setStoreRequests] = useState<StoreRequestRecord[]>([]);
+  const [reportSkus, setReportSkus] = useState<SuperAdminReportSku[]>([]);
+  const [reportCategories, setReportCategories] = useState<SuperAdminReportBreakdown[]>([]);
+  const [reportBrands, setReportBrands] = useState<SuperAdminReportBreakdown[]>([]);
+  const [sevenDaySales, setSevenDaySales] = useState<SuperAdminSevenDayPoint[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<SuperAdminRecentTransaction[]>([]);
+  const [chartTimeframe, setChartTimeframe] = useState<'7days' | 'month' | 'year'>('7days');
+  const [hoveredChartPoint, setHoveredChartPoint] = useState<number | null>(null);
+  const [reportStoreFilter, setReportStoreFilter] = useState<string>('ALL');
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [exportingStoreId, setExportingStoreId] = useState<number | null>(null);
@@ -157,11 +180,10 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
     manifestUrl: string;
   } | null>(null);
 
-  // Create Store Modal (Store Name, Owner Name, Owner Email, Password, Subdomain Slug, Subscription Plan)
+  // Create Store Modal (Store Name, Owner Email, Password, Subdomain Slug, Subscription Plan)
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [newStoreName, setNewStoreName] = useState('');
   const [newSlug, setNewSlug] = useState('');
-  const [newOwnerName, setNewOwnerName] = useState('');
   const [newOwnerEmail, setNewOwnerEmail] = useState('');
   const [newOwnerPassword, setNewOwnerPassword] = useState('');
   const [newSubscriptionPlan, setNewSubscriptionPlan] = useState<'6_MONTHS' | 'YEARLY'>('YEARLY');
@@ -185,6 +207,13 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       if (data.metrics) setMetrics(data.metrics);
       if (Array.isArray(data.stores)) setStores(data.stores);
       if (Array.isArray(data.storeRequests)) setStoreRequests(data.storeRequests);
+      if (data.reports) {
+        if (Array.isArray(data.reports.topSkus)) setReportSkus(data.reports.topSkus);
+        if (Array.isArray(data.reports.topCategories)) setReportCategories(data.reports.topCategories);
+        if (Array.isArray(data.reports.topBrands)) setReportBrands(data.reports.topBrands);
+        if (Array.isArray(data.reports.sevenDaySales)) setSevenDaySales(data.reports.sevenDaySales);
+        if (Array.isArray(data.reports.recentTransactions)) setRecentTransactions(data.reports.recentTransactions);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load SuperAdmin overview.');
     } finally {
@@ -213,7 +242,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
         if (e.key === 'F1') setActiveTab('stores');
         if (e.key === 'F2') setActiveTab('requests');
         if (e.key === 'F3') setCreateModalOpen(true);
-        if (e.key === 'F4') setActiveTab('revenue');
+        if (e.key === 'F4') setActiveTab('reports');
         if (e.key === 'F5') setActiveTab('manifests');
       }
     };
@@ -465,7 +494,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       const res = await api.superAdmin.createTenant({
         storeName: toTitleCaseTrimmed(newStoreName),
         slug: toLowerTrimmed(newSlug),
-        ownerName: toTitleCaseTrimmed(newOwnerName),
         ownerEmail: toLowerTrimmed(newOwnerEmail),
         password: newOwnerPassword,
         subscriptionPlan: newSubscriptionPlan,
@@ -479,7 +507,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       setCreateModalOpen(false);
       setNewStoreName('');
       setNewSlug('');
-      setNewOwnerName('');
       setNewOwnerEmail('');
       setNewOwnerPassword('');
       setNewSubscriptionPlan('YEARLY');
@@ -570,7 +597,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
 
         {/* Top Application Bar with backdrop blur */}
         <PublicHeader
-          storeName="MyPOS SaaS C-Panel"
+          storeName="POS SaaS C-Panel"
           badgeText="Control Plane Online"
           badgeVariant="online"
           subtitle="Multi-Tenant Retail POS Cloud • SuperAdmin Access"
@@ -599,7 +626,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     id="superadmin-auth-title"
                     className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight"
                   >
-                    MyPOS SaaS C-Panel
+                    POS SaaS C-Panel
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-purple-200/80 mt-1 font-medium">
                     Platform SuperAdmin Control Plane
@@ -924,7 +951,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
 
         {/* Bottom Global Footer */}
         <PublicFooter
-          storeName="MyPOS SaaS C-Panel"
+          storeName="POS SaaS C-Panel"
           subtitle="Multi-Tenant Retail POS & Inventory Control Plane"
         />
       </div>
@@ -947,7 +974,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       s.slug.toLowerCase().includes(normalizedSearch) ||
       s.subdomain.toLowerCase().includes(normalizedSearch) ||
       (s.appKey || '').toLowerCase().includes(normalizedSearch) ||
-      (s.ownerName || '').toLowerCase().includes(normalizedSearch) ||
       (s.ownerEmail || '').toLowerCase().includes(normalizedSearch)
     );
   });
@@ -958,8 +984,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
     return (
       r.store_name.toLowerCase().includes(normalizedSearch) ||
       r.requested_slug.toLowerCase().includes(normalizedSearch) ||
-      r.owner_name.toLowerCase().includes(normalizedSearch) ||
-      r.owner_email.toLowerCase().includes(normalizedSearch)
+      (r.owner_email || '').toLowerCase().includes(normalizedSearch)
     );
   });
 
@@ -997,9 +1022,9 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
       header: 'PLATFORM & ANALYTICS',
       items: [
         {
-          id: 'revenue' as SuperAdminTab,
-          label: 'Platform Revenue',
-          icon: TrendingUp,
+          id: 'reports' as SuperAdminTab,
+          label: 'Reports & Analytics',
+          icon: BarChart3,
           shortcut: 'F4',
         },
         {
@@ -1034,7 +1059,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
             {!collapsed && (
               <div className="min-w-0 flex-1">
                 <h1 className="text-xs font-bold text-slate-900 dark:text-white truncate tracking-tight leading-tight">
-                  MyPOS SaaS C-Panel
+                  POS SaaS C-Panel
                 </h1>
                 <p className="text-[10px] text-slate-500 dark:text-indigo-200/70 font-medium truncate mt-0.5">
                   SuperAdmin Control Plane
@@ -1380,7 +1405,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
 
             {!collapsed && (
               <div className="px-2 pt-1 border-t border-indigo-500/15 flex items-center justify-between text-[9.5px] text-slate-400 dark:text-slate-500">
-                <span>MyPOS SaaS C-Panel</span>
+                <span>POS SaaS C-Panel</span>
                 <span className="font-mono">v1.0.0</span>
               </div>
             )}
@@ -1451,7 +1476,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                 {activeTab === 'dashboard' && 'SuperAdmin Executive Dashboard'}
                 {activeTab === 'stores' && 'Deployed Stores & Middleware Control'}
                 {activeTab === 'requests' && 'Pending Store Requests Queue'}
-                {activeTab === 'revenue' && 'Platform Sales & Catalog Telemetry'}
+                {activeTab === 'reports' && 'Platform Reports, Top Revenue Stores & Top SKUs'}
                 {activeTab === 'manifests' && 'Scoped Tenant PWA Manifests'}
               </h2>
             </div>
@@ -1555,7 +1580,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                   {activeTab === 'dashboard' && 'Dashboard'}
                   {activeTab === 'stores' && 'Deployed Stores Directory'}
                   {activeTab === 'requests' && 'Store Requests & 1-Click Provisioning'}
-                  {activeTab === 'revenue' && 'Platform Revenue & SKU Telemetry'}
+                  {activeTab === 'reports' && 'Platform Reports & Analytics'}
                   {activeTab === 'manifests' && 'Scoped Store & Admin PWA Manifests'}
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1682,98 +1707,877 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
               </div>
             )}
 
-            {/* ROW 1: 5 KPI METRIC CARDS WITH ANIMATED COUNTER (Aligned with Store DashboardOverview) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-              <StatCard
-                id="superadmin-stat-total-stores"
-                title="Deployed Stores"
-                value={metrics.totalStores}
-                icon={Store}
-                iconColor="blue"
-                sparkline="blue"
-                trendIndicator={{
-                  value: `${metrics.activeStores} Active`,
-                  direction: 'up',
-                  label: 'tenants',
-                }}
-                loading={loading}
-                delay={0}
-                duration={1000}
-              />
+            {/* EXECUTIVE DASHBOARD VIEW: 5 KPI CARDS + GRAPHICAL STATISTICS (MATCHING STORE DASHBOARD) */}
+            {activeTab === 'dashboard' && (() => {
+              // Dual-spline Sales & Transactions SVG chart geometry (aligned with Store DashboardOverview.tsx)
+              const chartWidth = 560;
+              const chartHeight = 200;
+              const paddingLeft = 36;
+              const paddingRight = 20;
+              const paddingTop = 20;
+              const paddingBottom = 30;
+              const innerWidth = chartWidth - paddingLeft - paddingRight;
+              const innerHeight = chartHeight - paddingTop - paddingBottom;
 
-              <StatCard
-                id="superadmin-stat-active-stores"
-                title="Active Tenants"
-                value={metrics.activeStores}
-                icon={CheckCircle2}
-                iconColor="emerald"
-                sparkline="emerald"
-                trendIndicator={{
-                  value: 'Online',
-                  direction: 'up',
-                  label: 'middleware',
-                }}
-                loading={loading}
-                delay={0}
-                duration={1000}
-              />
+              const rawChartSeries =
+                sevenDaySales.length > 0
+                  ? sevenDaySales
+                  : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((lbl) => ({
+                      date: '',
+                      label: lbl,
+                      amount: 0,
+                      txCount: 0,
+                    }));
 
-              <StatCard
-                id="superadmin-stat-suspended-stores"
-                title="Suspended Stores"
-                value={metrics.suspendedStores}
-                icon={AlertCircle}
-                iconColor="rose"
-                sparkline="rose"
-                valueClassName={metrics.suspendedStores > 0 ? 'text-rose-600 dark:text-rose-400' : undefined}
-                trendIndicator={
-                  metrics.suspendedStores > 0
-                    ? { value: `${metrics.suspendedStores}`, direction: 'down', label: 'revoked' }
-                    : { value: '0', direction: 'neutral', label: 'none suspended' }
+              const maxChartVal = Math.max(
+                100,
+                ...rawChartSeries.map((s) => Math.max(s.amount || 0, s.txCount || 0))
+              );
+
+              const chartPoints = rawChartSeries.map((d, index) => {
+                const denom = Math.max(1, rawChartSeries.length - 1);
+                const x = paddingLeft + (index / denom) * innerWidth;
+                const ySales = paddingTop + innerHeight - ((d.amount || 0) / maxChartVal) * innerHeight;
+                const yTx = paddingTop + innerHeight - ((d.txCount || 0) / maxChartVal) * innerHeight;
+                return { x, ySales, yTx, ...d };
+              });
+
+              const buildSplinePath = (pts: { x: number; y: number }[]) => {
+                if (pts.length === 0) return '';
+                if (pts.length === 1) return `M ${pts[0].x},${pts[0].y}`;
+                let d = `M ${pts[0].x},${pts[0].y}`;
+                for (let i = 0; i < pts.length - 1; i++) {
+                  const p0 = pts[i === 0 ? 0 : i - 1];
+                  const p1 = pts[i];
+                  const p2 = pts[i + 1];
+                  const p3 = pts[i + 2] || p2;
+                  const cp1x = p1.x + (p2.x - p0.x) / 5;
+                  const cp1y = p1.y + (p2.y - p0.y) / 5;
+                  const cp2x = p2.x - (p3.x - p1.x) / 5;
+                  const cp2y = p2.y - (p3.y - p1.y) / 5;
+                  d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
                 }
-                loading={loading}
-                delay={0}
-                duration={1000}
-              />
+                return d;
+              };
 
-              <StatCard
-                id="superadmin-stat-pending-requests"
-                title="Pending Requests"
-                value={metrics.pendingRequests}
-                icon={Clock}
-                iconColor="purple"
-                sparkline="purple"
-                trendIndicator={{
-                  value: '1-Click',
-                  direction: 'up',
-                  label: 'provisioning',
-                }}
-                loading={loading}
-                delay={0}
-                duration={1000}
-              />
+              const salesLinePath = buildSplinePath(chartPoints.map((p) => ({ x: p.x, y: p.ySales })));
+              const txLinePath = buildSplinePath(chartPoints.map((p) => ({ x: p.x, y: p.yTx })));
+              const baselineY = paddingTop + innerHeight;
+              const lastX = chartPoints.length > 0 ? chartPoints[chartPoints.length - 1].x : innerWidth;
+              const firstX = chartPoints.length > 0 ? chartPoints[0].x : paddingLeft;
 
-              <StatCard
-                id="superadmin-stat-platform-revenue"
-                title="Platform Sales"
-                value={Math.round(metrics.totalPlatformRevenue)}
-                prefix="Rs. "
-                icon={TrendingUp}
-                iconColor="sky"
-                sparkline="sky"
-                trendIndicator={{
-                  value: `${metrics.totalPlatformProducts.toLocaleString()} SKUs`,
-                  direction: 'up',
-                  label: 'catalog',
-                }}
-                loading={loading}
-                delay={0}
-                duration={1000}
-              />
-            </div>
+              const salesAreaPath =
+                chartPoints.length > 0 && salesLinePath
+                  ? `${salesLinePath} L ${lastX},${baselineY} L ${firstX},${baselineY} Z`
+                  : '';
+              const txAreaPath =
+                chartPoints.length > 0 && txLinePath
+                  ? `${txLinePath} L ${lastX},${baselineY} L ${firstX},${baselineY} Z`
+                  : '';
 
-            {/* SECTION 1: DEPLOYED STORES & REAL-TIME MIDDLEWARE ACCESS CONTROL */}
-            {(activeTab === 'dashboard' || activeTab === 'stores' || activeTab === 'revenue') && (
+              // Top Revenue Stores sorted for Donut Gauges & Graphical Bar Comparison
+              const topStoresByRevenue = [...stores].sort((a, b) => {
+                if (b.totalSales !== a.totalSales) return b.totalSales - a.totalSales;
+                if (b.productCount !== a.productCount) return b.productCount - a.productCount;
+                return b.totalStockUnits - a.totalStockUnits;
+              });
+
+              const totalRevenueAll = stores.reduce((sum, s) => sum + (s.totalSales || 0), 0);
+              const totalStockValAll = stores.reduce((sum, s) => sum + (s.inventoryValue || 0), 0);
+              const maxStoreRevenue = Math.max(
+                1,
+                ...topStoresByRevenue.map((s) => (totalRevenueAll > 0 ? s.totalSales : s.inventoryValue || s.productCount || 1))
+              );
+
+              // Donut Ring Items (Top 2 Stores by Revenue or Inventory Value)
+              const donutStores = topStoresByRevenue.slice(0, 2).map((st, idx) => {
+                const pct =
+                  totalRevenueAll > 0
+                    ? Math.min(100, Math.max(8, Math.round((st.totalSales / totalRevenueAll) * 100)))
+                    : totalStockValAll > 0
+                    ? Math.min(100, Math.max(8, Math.round(((st.inventoryValue || 0) / totalStockValAll) * 100)))
+                    : stores.length > 0
+                    ? Math.round(100 / stores.length)
+                    : 0;
+                return {
+                  id: st.id,
+                  name: st.name,
+                  slug: st.slug,
+                  themeColor: st.themeColor || (idx === 0 ? '#3B82F6' : '#8B5CF6'),
+                  pct,
+                  subtitle:
+                    st.totalSales > 0
+                      ? `${st.currency} ${Math.round(st.totalSales).toLocaleString()}`
+                      : `${st.productCount} SKUs • ${st.totalStockUnits} units`,
+                };
+              });
+
+              return (
+                <div className="space-y-6">
+                  {/* ROW 1: 5 KPI METRIC CARDS WITH ANIMATED COUNTER */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                    <StatCard
+                      id="superadmin-stat-total-stores"
+                      title="Deployed Stores"
+                      value={metrics.totalStores}
+                      icon={Store}
+                      iconColor="blue"
+                      sparkline="blue"
+                      trendIndicator={{
+                        value: `${metrics.activeStores} Active`,
+                        direction: 'up',
+                        label: 'tenants',
+                      }}
+                      loading={loading}
+                      delay={0}
+                      duration={1000}
+                    />
+
+                    <StatCard
+                      id="superadmin-stat-active-stores"
+                      title="Active Tenants"
+                      value={metrics.activeStores}
+                      icon={CheckCircle2}
+                      iconColor="emerald"
+                      sparkline="emerald"
+                      trendIndicator={{
+                        value: 'Online',
+                        direction: 'up',
+                        label: 'middleware',
+                      }}
+                      loading={loading}
+                      delay={0}
+                      duration={1000}
+                    />
+
+                    <StatCard
+                      id="superadmin-stat-suspended-stores"
+                      title="Suspended Stores"
+                      value={metrics.suspendedStores}
+                      icon={AlertCircle}
+                      iconColor="rose"
+                      sparkline="rose"
+                      valueClassName={metrics.suspendedStores > 0 ? 'text-rose-600 dark:text-rose-400' : undefined}
+                      trendIndicator={
+                        metrics.suspendedStores > 0
+                          ? { value: `${metrics.suspendedStores}`, direction: 'down', label: 'revoked' }
+                          : { value: '0', direction: 'neutral', label: 'none suspended' }
+                      }
+                      loading={loading}
+                      delay={0}
+                      duration={1000}
+                    />
+
+                    <StatCard
+                      id="superadmin-stat-pending-requests"
+                      title="Pending Requests"
+                      value={metrics.pendingRequests}
+                      icon={Clock}
+                      iconColor="purple"
+                      sparkline="purple"
+                      trendIndicator={{
+                        value: '1-Click',
+                        direction: 'up',
+                        label: 'provisioning',
+                      }}
+                      loading={loading}
+                      delay={0}
+                      duration={1000}
+                    />
+
+                    <StatCard
+                      id="superadmin-stat-platform-revenue"
+                      title="Platform Sales"
+                      value={Math.round(metrics.totalPlatformRevenue)}
+                      prefix="Rs. "
+                      icon={TrendingUp}
+                      iconColor="sky"
+                      sparkline="sky"
+                      trendIndicator={{
+                        value: `${metrics.totalPlatformProducts.toLocaleString()} SKUs`,
+                        direction: 'up',
+                        label: 'catalog',
+                      }}
+                      loading={loading}
+                      delay={0}
+                      duration={1000}
+                    />
+                  </div>
+
+                  {/* ROW 2: 3 GRAPHICAL CARDS (Platform Sales Overview + Top Revenue Stores Donut Gauges + Best Selling Products) */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-5">
+                    {/* Card 1: Platform Sales Overview Dual-Spline Area Chart (Span 5 on xl) */}
+                    <div className="md:col-span-2 lg:col-span-12 xl:col-span-5 app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-5 flex flex-col justify-between shadow-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                          Platform Sales Overview
+                        </h2>
+
+                        <div className="flex items-center gap-3">
+                          {/* Chart Legend */}
+                          <div className="flex items-center gap-2.5 text-[11px]">
+                            <div className="flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                              <span className="w-2 h-2 rounded-full bg-[#3B82F6] dark:shadow-[0_0_6px_#3B82F6]" />
+                              <span>Sales Amount</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                              <span className="w-2 h-2 rounded-full bg-[#06B6D4] dark:shadow-[0_0_6px_#06B6D4]" />
+                              <span>Transactions</span>
+                            </div>
+                          </div>
+
+                          {/* Timeframe selector */}
+                          <div className="relative">
+                            <select
+                              value={chartTimeframe}
+                              onChange={(e) => setChartTimeframe(e.target.value as '7days' | 'month' | 'year')}
+                              className="appearance-none bg-slate-50 dark:bg-purple-500/20 border border-slate-200 dark:border-purple-400/40 text-[11px] font-medium text-slate-700 dark:text-purple-200 py-1 pl-2.5 pr-6 rounded-lg outline-none cursor-pointer hover:border-purple-400 transition"
+                            >
+                              <option value="7days" className="dark:bg-[#120726] dark:text-purple-100">
+                                Last 7 Days
+                              </option>
+                              <option value="month" className="dark:bg-[#120726] dark:text-purple-100">
+                                This Month
+                              </option>
+                              <option value="year" className="dark:bg-[#120726] dark:text-purple-100">
+                                This Year
+                              </option>
+                            </select>
+                            <ChevronDown className="w-3 h-3 text-slate-400 dark:text-purple-300 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Dual Spline Chart Canvas */}
+                      <div className="relative w-full overflow-hidden">
+                        <svg
+                          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                          className="w-full h-48 overflow-visible"
+                        >
+                          <defs>
+                            <linearGradient id="superAdminSalesGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.4" />
+                              <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.0" />
+                            </linearGradient>
+                            <linearGradient id="superAdminTxGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.32" />
+                              <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.0" />
+                            </linearGradient>
+                          </defs>
+
+                          {/* Dotted Horizontal Grid lines */}
+                          {[100, 80, 60, 40, 20, 0].map((val) => {
+                            const y = paddingTop + innerHeight - (val / 100) * innerHeight;
+                            return (
+                              <g key={val}>
+                                <line
+                                  x1={paddingLeft}
+                                  y1={y}
+                                  x2={paddingLeft + innerWidth}
+                                  y2={y}
+                                  stroke="currentColor"
+                                  className="text-slate-100 dark:text-[#1A263D] stroke-1"
+                                  strokeDasharray="3 3"
+                                />
+                                <text
+                                  x={paddingLeft - 8}
+                                  y={y + 3}
+                                  textAnchor="end"
+                                  className="text-[9.5px] font-mono fill-slate-400 dark:fill-slate-500"
+                                >
+                                  {val}
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {/* Area Fills */}
+                          <path d={salesAreaPath} fill="url(#superAdminSalesGrad)" />
+                          <path d={txAreaPath} fill="url(#superAdminTxGrad)" />
+
+                          {/* Spline Curves */}
+                          <path
+                            d={salesLinePath}
+                            fill="none"
+                            stroke="#3B82F6"
+                            strokeWidth="2.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="neon-glow-blue"
+                          />
+                          <path
+                            d={txLinePath}
+                            fill="none"
+                            stroke="#06B6D4"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="neon-glow-cyan"
+                          />
+
+                          {/* Point Markers & Hover Tooltips */}
+                          {chartPoints.map((p, i) => {
+                            const isHovered = hoveredChartPoint === i;
+                            return (
+                              <g
+                                key={`sa-point-${p.label}-${i}`}
+                                className="cursor-pointer"
+                                onMouseEnter={() => setHoveredChartPoint(i)}
+                                onMouseLeave={() => setHoveredChartPoint(null)}
+                              >
+                                <circle
+                                  cx={p.x}
+                                  cy={p.ySales}
+                                  r={isHovered ? 5.5 : 3.5}
+                                  className="fill-white dark:fill-[#0A0E1A] stroke-[#3B82F6] transition-all"
+                                  strokeWidth="2.5"
+                                />
+                                <circle
+                                  cx={p.x}
+                                  cy={p.yTx}
+                                  r={isHovered ? 5 : 3}
+                                  className="fill-white dark:fill-[#0A0E1A] stroke-[#06B6D4] transition-all"
+                                  strokeWidth="2"
+                                />
+                                <text
+                                  x={p.x}
+                                  y={chartHeight - 8}
+                                  textAnchor="middle"
+                                  className="text-[10px] font-medium fill-slate-500 dark:fill-slate-400"
+                                >
+                                  {p.label}
+                                </text>
+
+                                {isHovered && (
+                                  <g className="pointer-events-none">
+                                    <rect
+                                      x={Math.max(paddingLeft, Math.min(p.x - 60, chartWidth - 125))}
+                                      y={Math.min(p.ySales, p.yTx) - 44}
+                                      width="120"
+                                      height="36"
+                                      rx="8"
+                                      className="fill-slate-900 dark:fill-[#131F37] stroke stroke-slate-700 dark:stroke-[#1E2D4A] shadow-xl"
+                                    />
+                                    <text
+                                      x={Math.max(paddingLeft + 60, Math.min(p.x, chartWidth - 65))}
+                                      y={Math.min(p.ySales, p.yTx) - 28}
+                                      textAnchor="middle"
+                                      className="text-[9.5px] font-bold fill-white font-mono"
+                                    >
+                                      Rs. {Math.round(p.amount).toLocaleString()}
+                                    </text>
+                                    <text
+                                      x={Math.max(paddingLeft + 60, Math.min(p.x, chartWidth - 65))}
+                                      y={Math.min(p.ySales, p.yTx) - 15}
+                                      textAnchor="middle"
+                                      className="text-[9px] font-medium fill-cyan-400 font-mono"
+                                    >
+                                      {p.txCount} Invoices
+                                    </text>
+                                  </g>
+                                )}
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      </div>
+                    </div>
+
+                    {/* Card 2: Top Performing Stores Donut Gauges (Span 4 on xl, matching Store Best Selling Brands) */}
+                    <div className="md:col-span-1 lg:col-span-6 xl:col-span-4 app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-5 flex flex-col justify-between min-w-0 shadow-xs">
+                      <div className="flex items-center justify-between mb-2">
+                        <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                          Top Performing Stores
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('reports')}
+                          className="text-xs font-bold text-purple-600 dark:text-cyan-400 hover:underline cursor-pointer"
+                        >
+                          View Reports
+                        </button>
+                      </div>
+
+                      {donutStores.length === 0 ? (
+                        <div className="py-8 text-center text-slate-400 dark:text-slate-500 text-xs">
+                          No store performance data yet.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3 sm:gap-4 py-2 my-auto min-w-0">
+                          {donutStores.map((st, idx) => {
+                            const pct = st.pct || 0;
+                            const circumference = 238.76;
+                            const strokeColor = idx === 0 ? '#3B82F6' : '#8B5CF6';
+
+                            return (
+                              <div
+                                key={st.id}
+                                onClick={() => onOpenStore(st.slug)}
+                                className="flex flex-col items-center text-center min-w-0 cursor-pointer group"
+                              >
+                                <div className="relative w-20 h-20 sm:w-24 sm:h-24 max-w-full flex items-center justify-center shrink-0">
+                                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                                    <circle
+                                      cx="50"
+                                      cy="50"
+                                      r="38"
+                                      className="text-slate-100 dark:text-slate-800 stroke-current"
+                                      strokeWidth="7"
+                                      fill="none"
+                                    />
+                                    <circle
+                                      cx="50"
+                                      cy="50"
+                                      r="38"
+                                      stroke={strokeColor}
+                                      strokeWidth="7"
+                                      strokeLinecap="round"
+                                      fill="none"
+                                      strokeDasharray={circumference}
+                                      strokeDashoffset={circumference * (1 - pct / 100)}
+                                      className={`transition-all duration-500 ${idx === 0 ? 'neon-glow-blue' : ''}`}
+                                    />
+                                  </svg>
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center p-2">
+                                    <div
+                                      className="w-8 h-8 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-xs group-hover:scale-105 transition"
+                                      style={{ backgroundColor: st.themeColor }}
+                                    >
+                                      {st.name.slice(0, 2).toUpperCase()}
+                                    </div>
+                                    <span className="text-[9.5px] font-mono font-bold text-slate-500 dark:text-slate-400 mt-0.5">
+                                      {pct}%
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-2.5 w-full min-w-0 px-1">
+                                  <div className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 truncate transition">
+                                    {st.name}
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
+                                    {st.subtitle}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Bottom Store Status Graphical Distribution Bar */}
+                      <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px] font-mono">
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                            ● {metrics.activeStores} Active
+                          </span>
+                          <span className="text-amber-600 dark:text-amber-400 font-bold">
+                            ● {pendingRequestsCount} Pending Req
+                          </span>
+                          <span className="text-rose-600 dark:text-rose-400 font-bold">
+                            ● {metrics.suspendedStores} Suspended
+                          </span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
+                          <div
+                            className="h-full bg-emerald-500 transition-all duration-500"
+                            style={{
+                              width: `${
+                                metrics.totalStores > 0
+                                  ? Math.max(10, Math.round((metrics.activeStores / metrics.totalStores) * 100))
+                                  : 100
+                              }%`,
+                            }}
+                          />
+                          {metrics.suspendedStores > 0 && (
+                            <div
+                              className="h-full bg-rose-500 transition-all duration-500"
+                              style={{
+                                width: `${Math.round((metrics.suspendedStores / Math.max(1, metrics.totalStores)) * 100)}%`,
+                              }}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Best Selling Products across Stores (Span 3 on xl, matching Store Dashboard) */}
+                    <div className="md:col-span-1 lg:col-span-6 xl:col-span-3 app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-5 flex flex-col justify-between min-w-0 shadow-xs">
+                      <div className="flex items-center justify-between mb-2">
+                        <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                          Best Selling Products
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('reports')}
+                          className="text-xs font-bold text-purple-600 dark:text-cyan-400 hover:underline cursor-pointer"
+                        >
+                          View All
+                        </button>
+                      </div>
+
+                      {reportSkus.length === 0 ? (
+                        <div className="py-8 text-center text-slate-400 dark:text-slate-500 text-xs">
+                          No product sales recorded yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-3 my-auto min-w-0">
+                          {reportSkus.slice(0, 3).map((prod, idx) => (
+                            <div
+                              key={`${prod.tenantId}-${prod.id}-${idx}`}
+                              onClick={() => onOpenStore(prod.storeSlug)}
+                              className="flex items-center justify-between gap-2 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition min-w-0 cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-slate-100 dark:bg-slate-950/60 overflow-hidden shrink-0 border border-slate-200/60 dark:border-slate-800">
+                                  <img
+                                    src={
+                                      prod.imageUrl ||
+                                      'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=150&auto=format&fit=crop&q=80'
+                                    }
+                                    alt={prod.productName}
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                    {prod.productName}
+                                  </div>
+                                  <div className="mt-0.5 sm:mt-1 flex items-center gap-1.5 flex-wrap">
+                                    {prod.category && (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-cyan-400 border border-purple-200/80 dark:border-cyan-500/30 whitespace-nowrap">
+                                        {prod.category}
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
+                                      {prod.storeName}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="text-right shrink-0 ml-1">
+                                <div className="text-xs font-bold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                                  Stock: {prod.totalStock}
+                                </div>
+                                <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono mt-0.5 whitespace-nowrap">
+                                  Sold: {prod.unitsSold}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ROW 3: STORE REVENUE GRAPHICAL BARS & LATEST TRANSACTIONS (Left Span 7) + QUICK ACTIONS (Right Span 5) */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    {/* Left: Graphical Store Revenue Comparison + Latest Platform Transactions (Span 7) */}
+                    <div className="lg:col-span-7 app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-5 flex flex-col justify-between gap-5 shadow-xs">
+                      {/* Top Half: Store Revenue & Catalog Graphical Bars */}
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                              Store Revenue &amp; Catalog Graphical Comparison
+                            </h2>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Visual comparison of deployed stores by POS revenue, SKU count, and stock units
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('reports')}
+                            className="text-xs font-bold text-purple-600 dark:text-cyan-400 hover:underline cursor-pointer"
+                          >
+                            Full Leaderboard
+                          </button>
+                        </div>
+
+                        <div className="space-y-3">
+                          {topStoresByRevenue.slice(0, 4).map((st) => {
+                            const metricVal =
+                              totalRevenueAll > 0
+                                ? st.totalSales
+                                : st.inventoryValue || st.productCount || 0;
+                            const barWidthPct = Math.min(
+                              100,
+                              Math.max(8, Math.round((metricVal / maxStoreRevenue) * 100))
+                            );
+                            return (
+                              <div
+                                key={st.id}
+                                onClick={() => onOpenStore(st.slug)}
+                                className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 hover:border-purple-300 dark:hover:border-purple-500/40 transition cursor-pointer"
+                              >
+                                <div className="flex items-center justify-between text-xs mb-1.5">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                                      style={{ backgroundColor: st.themeColor || '#7C3AED' }}
+                                    />
+                                    <span className="font-bold text-slate-900 dark:text-white truncate">
+                                      {st.name}
+                                    </span>
+                                    <span className="text-[10.5px] font-mono text-slate-400">
+                                      /{st.slug}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 font-mono text-xs shrink-0">
+                                    <span className="text-slate-500 dark:text-slate-400">
+                                      {st.productCount} SKUs • {st.salesCount} inv
+                                    </span>
+                                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                      {st.currency} {Math.round(st.totalSales).toLocaleString()}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="w-full h-2 rounded-full bg-slate-200/80 dark:bg-slate-800 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-gradient-to-r from-purple-600 via-indigo-500 to-cyan-400 transition-all duration-500"
+                                    style={{ width: `${barWidthPct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Bottom Half: Latest Platform Transactions (matching Store Dashboard) */}
+                      <div className="pt-4 border-t border-slate-100 dark:border-slate-800/80">
+                        <div className="flex items-center justify-between mb-3">
+                          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Latest Platform Transactions
+                          </h2>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('reports')}
+                            className="text-xs font-bold text-purple-600 dark:text-cyan-400 hover:underline cursor-pointer"
+                          >
+                            View All
+                          </button>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="dark:bg-gradient-to-r dark:from-purple-900 dark:via-indigo-950 dark:to-slate-900">
+                              <tr className="border-b border-slate-100 dark:border-purple-800/80 text-slate-400 dark:text-white font-semibold">
+                                <th className="py-2 px-2.5 font-semibold">Transaction #</th>
+                                <th className="py-2 px-2.5 font-semibold">Store</th>
+                                <th className="py-2 px-2.5 font-semibold">Customer / Party</th>
+                                <th className="py-2 px-2.5 font-semibold">Status</th>
+                                <th className="py-2 px-2.5 font-semibold text-right">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                              {recentTransactions.length === 0 ? (
+                                <tr>
+                                  <td colSpan={5} className="py-6 text-center text-slate-400 dark:text-slate-500">
+                                    No platform transactions recorded yet.
+                                  </td>
+                                </tr>
+                              ) : (
+                                recentTransactions.slice(0, 5).map((tx, idx) => (
+                                  <tr key={`${tx.reference}-${idx}`} className="table-row-hover">
+                                    <td className="py-2.5 px-2.5 font-mono font-semibold text-purple-600 dark:text-cyan-400">
+                                      {tx.reference}
+                                    </td>
+                                    <td className="py-2.5 px-2.5 font-bold text-slate-800 dark:text-slate-200">
+                                      {tx.storeName}
+                                    </td>
+                                    <td className="py-2.5 px-2.5 text-slate-600 dark:text-slate-300">
+                                      {tx.customerName}
+                                    </td>
+                                    <td className="py-2.5 px-2.5">
+                                      <span
+                                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                          tx.type === 'Return'
+                                            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60'
+                                            : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60'
+                                        }`}
+                                      >
+                                        {tx.status}
+                                      </span>
+                                    </td>
+                                    <td className="py-2.5 px-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
+                                      {tx.currency} {Math.round(tx.amount).toLocaleString()}
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: Quick Actions (Span 5, matching Store Dashboard Quick Actions) */}
+                    <div className="lg:col-span-5 app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-5 flex flex-col justify-between shadow-xs">
+                      <div className="flex items-center justify-between gap-2 mb-4">
+                        <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                          Quick Actions
+                        </h2>
+                        <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+                          Shortcuts F1–F5
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 flex-1">
+                        {/* Action 1: Deployed Stores (F1) */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('stores')}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <Store className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              F1
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              Deployed Stores
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              {stores.length} Tenants Directory
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Action 2: Store Requests (F2) */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('requests')}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <Clock className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              F2
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              Store Requests
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              {pendingRequestsCount} Pending Approval
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Action 3: Provision New Store (F3) */}
+                        <button
+                          type="button"
+                          onClick={() => setCreateModalOpen(true)}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <Plus className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              F3
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              Provision Store
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              1-Click Tenant Setup
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Action 4: Platform Reports (F4) */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('reports')}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <BarChart3 className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              F4
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              Platform Reports
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              Top Stores &amp; SKUs
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Action 5: Scoped PWA Manifests (F5) */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('manifests')}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <FileCode2 className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              F5
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              PWA Manifests
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              Scoped Store Apps
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Action 6: Export All SQL Backup */}
+                        <button
+                          type="button"
+                          disabled={exportingPlatform}
+                          onClick={handleExportPlatformSql}
+                          className="quick-action-btn p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 text-left transition-all duration-200 flex flex-col justify-between group cursor-pointer shadow-2xs overflow-hidden disabled:opacity-50"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 transition shadow-2xs">
+                              <Download className="w-4 h-4" />
+                            </div>
+                            <kbd className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 group-hover:border-purple-300 dark:group-hover:border-purple-500/50 group-hover:text-purple-700 dark:group-hover:text-purple-300 transition">
+                              SQL
+                            </kbd>
+                          </div>
+                          <div className="mt-3">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300 transition">
+                              {exportingPlatform ? 'Exporting...' : 'Export All SQL'}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 transition">
+                              Full Platform Backup
+                            </div>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* SECTION 1: DEPLOYED STORES & REAL-TIME MIDDLEWARE ACCESS CONTROL (Strictly on 'stores' route only) */}
+            {activeTab === 'stores' && (
               <div className="app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl overflow-hidden shadow-xs transition-colors">
                 <div className="px-5 sm:px-6 py-4 border-b border-slate-200/80 dark:border-indigo-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
@@ -1814,7 +2618,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     <thead>
                       <tr className="border-b border-slate-200/80 dark:border-indigo-500/20 text-[11px] font-mono uppercase text-slate-500 dark:text-slate-400 bg-slate-50/80 dark:bg-[#0D1322]/60">
                         <th className="py-3.5 px-5">Store</th>
-                        <th className="py-3.5 px-4">Owner &amp; Currency</th>
+                        <th className="py-3.5 px-4">Contact &amp; Currency</th>
                         <th className="py-3.5 px-4">Subscription &amp; App Key</th>
                         <th className="py-3.5 px-4 text-right">Products</th>
                         <th className="py-3.5 px-4 text-right">Total Sales</th>
@@ -1867,11 +2671,11 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                               </td>
 
                               <td className="py-4 px-4">
-                                <div className="text-xs text-slate-800 dark:text-slate-200 font-bold">
-                                  {store.ownerName}
+                                <div className="text-xs font-mono text-slate-800 dark:text-slate-200 font-bold">
+                                  {store.ownerEmail}
                                 </div>
                                 <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                  {store.ownerEmail} • {store.currency}
+                                  {store.currency}{store.ownerPhone ? ` • ${store.ownerPhone}` : ''}
                                 </div>
                                 <div className="text-[10.5px] font-medium mt-0.5 text-slate-500 dark:text-slate-400">
                                   {store.onboardingCompleted ? (
@@ -2086,8 +2890,8 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
               </div>
             )}
 
-            {/* SECTION 2: STORE REQUESTS MANAGEMENT & 1-CLICK PROVISIONING */}
-            {(activeTab === 'dashboard' || activeTab === 'requests') && (
+            {/* SECTION 2: STORE REQUESTS MANAGEMENT & 1-CLICK PROVISIONING (Strictly on 'requests' route only) */}
+            {activeTab === 'requests' && (
               <div className="app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl overflow-hidden shadow-xs transition-colors">
                 <div className="px-5 sm:px-6 py-4 border-b border-slate-200/80 dark:border-indigo-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
@@ -2129,7 +2933,7 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                       <tr className="border-b border-slate-200/80 dark:border-indigo-500/20 text-[11px] font-mono uppercase text-slate-500 dark:text-slate-400 bg-slate-50/80 dark:bg-[#0D1322]/60">
                         <th className="py-3.5 px-5">Requested Store</th>
                         <th className="py-3.5 px-4">Store Slug</th>
-                        <th className="py-3.5 px-4">Owner Details</th>
+                        <th className="py-3.5 px-4">Contact Details</th>
                         <th className="py-3.5 px-4">Plan</th>
                         <th className="py-3.5 px-4 text-center">Status</th>
                         <th className="py-3.5 px-5 text-right">Manage Request Actions</th>
@@ -2165,12 +2969,14 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                                 {reqItem.requested_slug}
                               </td>
                               <td className="py-4 px-4">
-                                <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                                  {reqItem.owner_name}
+                                <div className="text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
+                                  {reqItem.owner_email}
                                 </div>
-                                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                  {reqItem.owner_email} {reqItem.owner_phone ? `• ${reqItem.owner_phone}` : ''}
-                                </div>
+                                {reqItem.owner_phone && (
+                                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                    {reqItem.owner_phone}
+                                  </div>
+                                )}
                                 {(reqItem as any).notes && (
                                   <div className="text-[11px] text-slate-500 dark:text-slate-400 italic mt-0.5">
                                     &ldquo;{(reqItem as any).notes}&rdquo;
@@ -2280,7 +3086,22 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
               </div>
             )}
 
-            {/* SECTION 3: SCOPED PWA MANIFEST REGISTRY VIEW */}
+            {/* SECTION 3: DEDICATED REPORTS & ANALYTICS VIEW (ALIGNED WITH STORE REPORTS DASHBOARD) */}
+            {activeTab === 'reports' && (
+              <SuperAdminReportsView
+                stores={stores}
+                storeRequests={storeRequests}
+                reportSkus={reportSkus}
+                reportCategories={reportCategories}
+                reportBrands={reportBrands}
+                recentTransactions={recentTransactions}
+                loading={loading}
+                onRefresh={loadOverview}
+                onOpenStore={onOpenStore}
+              />
+            )}
+
+            {/* SECTION 4: SCOPED PWA MANIFEST REGISTRY VIEW */}
             {activeTab === 'manifests' && (
               <div className="app-card bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-indigo-500/20 rounded-2xl p-6 space-y-4 shadow-xs">
                 <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-indigo-500/20 pb-4">
@@ -2396,20 +3217,6 @@ export const SuperAdminControlPanel: React.FC<SuperAdminControlPanelProps> = ({
                     }
                   }}
                   placeholder="Apex Footwear"
-                  className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm outline-none focus:border-purple-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Owner Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newOwnerName}
-                  onChange={(e) => setNewOwnerName(toTitleCaseLive(e.target.value))}
-                  placeholder="Bilal Ahmed"
                   className="app-input capitalize w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-purple-800/60 text-slate-900 dark:text-white text-sm outline-none focus:border-purple-600"
                 />
               </div>

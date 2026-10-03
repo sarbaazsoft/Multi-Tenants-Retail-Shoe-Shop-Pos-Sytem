@@ -54,7 +54,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
   // Store request form states
   const [storeName, setStoreName] = useState('');
   const [requestedSlug, setRequestedSlug] = useState(initialRequestedSlug);
-  const [ownerName, setOwnerName] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
   const [ownerPhone, setOwnerPhone] = useState('');
   const [plan, setPlan] = useState('1_YEAR_RS_18000');
@@ -102,7 +101,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
       const res = await api.saas.submitStoreRequest({
         storeName: toTitleCaseTrimmed(storeName),
         requestedSlug: toLowerTrimmed(requestedSlug),
-        ownerName: toTitleCaseTrimmed(ownerName),
         ownerEmail: toLowerTrimmed(ownerEmail),
         ownerPhone: ownerPhone.trim(),
         plan,
@@ -112,7 +110,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
         requestedSlug: res.requestedSlug,
       });
       setStoreName('');
-      setOwnerName('');
       setOwnerEmail('');
       setOwnerPhone('');
     } catch (err: any) {
@@ -1256,23 +1253,6 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Store Owner Name *
-                    </label>
-                    <div className="relative">
-                      <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                      <input
-                        type="text"
-                        required
-                        value={ownerName}
-                        onChange={(e) => setOwnerName(toTitleCaseLive(e.target.value))}
-                        placeholder="Tariq Mahmood"
-                        className="capitalize w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-[#0066FF]"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
                       Owner Email *
                     </label>
                     <div className="relative">
@@ -1287,9 +1267,7 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                       />
                     </div>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
                       Phone / WhatsApp
@@ -1305,20 +1283,20 @@ export const SaasLandingPage: React.FC<SaasLandingPageProps> = ({
                       />
                     </div>
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Subscription Plan
-                    </label>
-                    <select
-                      value={plan}
-                      onChange={(e) => setPlan(e.target.value)}
-                      className="capitalize w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-[#0066FF]"
-                    >
-                      <option value="6_MONTHS_RS_10000">6 Months — Rs. 10,000</option>
-                      <option value="1_YEAR_RS_18000">1 Year — Rs. 18,000 (Most Popular)</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Subscription Plan
+                  </label>
+                  <select
+                    value={plan}
+                    onChange={(e) => setPlan(e.target.value)}
+                    className="capitalize w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-[#0066FF]"
+                  >
+                    <option value="6_MONTHS_RS_10000">6 Months — Rs. 10,000</option>
+                    <option value="1_YEAR_RS_18000">1 Year — Rs. 18,000 (Most Popular)</option>
+                  </select>
                 </div>
 
                 <button

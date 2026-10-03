@@ -730,8 +730,8 @@ export const SupplierReturnModal: React.FC<SupplierReturnModalProps> = ({
                           onChange={(e) => updateItem(idx, { defectType: e.target.value })}
                           className="capitalize flex-1 text-xs border border-slate-200 dark:border-purple-400/40 rounded-md px-2 py-1 bg-white dark:bg-purple-500/20 text-slate-700 dark:text-purple-200 hover:bg-slate-50 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] focus:ring-1 focus:ring-purple-500 cursor-pointer"
                         >
-                          {COMMON_DEFECT_TYPES.map((d) => (
-                            <option key={d} value={d} className="dark:bg-[#120726] dark:text-purple-100">
+                          {COMMON_DEFECT_TYPES.map((d, dIdx) => (
+                            <option key={`defect-type-${d}-${dIdx}`} value={d} className="dark:bg-[#120726] dark:text-purple-100">
                               {d}
                             </option>
                           ))}

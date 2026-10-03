@@ -60,6 +60,29 @@ self.addEventListener('activate', (event) => {
 `);
 });
 
+// Cross-Origin API Authentication & Store Subdomain Isolation Middleware
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin.trim() && origin !== 'null') {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, X-Auth-Token, X-Tenant-Slug, X-Store-Subdomain, X-Simulated-Host, X-Requested-With'
+    );
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'X-SaaS-Mode, X-Tenant-Id, X-Tenant-Slug, X-Store-Subdomain, X-Tenant-Status, X-Subscription-Status'
+    );
+    res.setHeader('Vary', 'Origin, Host, X-Tenant-Slug, X-Store-Subdomain');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 // Support GET-based RPC fallback for iframe proxy environments that block POST/PUT/PATCH/DELETE or custom headers with 403
 app.use((req, _res, next) => {
   if (typeof req.query.__token === 'string' && req.query.__token) {
@@ -69,6 +92,10 @@ app.use((req, _res, next) => {
   if (typeof req.query.__tenant === 'string' && req.query.__tenant) {
     req.headers['x-tenant-slug'] = req.query.__tenant;
     delete req.query.__tenant;
+  }
+  if (typeof req.query.__subdomain === 'string' && req.query.__subdomain) {
+    req.headers['x-store-subdomain'] = req.query.__subdomain;
+    delete req.query.__subdomain;
   }
   if (req.method === 'GET' && typeof req.query.__method === 'string' && req.query.__method) {
     req.method = req.query.__method.toUpperCase();
@@ -89,7 +116,7 @@ app.get('/admin/manifest.webmanifest', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.json({
     id: '/admin/',
-    name: 'MyPOS SaaS C-Panel',
+    name: 'POS SaaS C-Panel',
     short_name: 'POS Admin',
     description: 'Dedicated SuperAdmin Control Panel for Multi-Tenant POS SaaS Platform',
     start_url: '/admin',
@@ -113,10 +140,22 @@ app.get('/admin/manifest.webmanifest', (_req, res) => {
         purpose: 'any',
       },
       {
+        src: '/pwa-maskable-192x192.png',
+        sizes: '192x192',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+      {
         src: '/pwa-maskable-512x512.png',
         sizes: '512x512',
         type: 'image/png',
         purpose: 'maskable',
+      },
+      {
+        src: '/apple-touch-icon.png',
+        sizes: '180x180',
+        type: 'image/png',
+        purpose: 'any',
       },
     ],
   });
@@ -185,7 +224,7 @@ app.get('/api/health', async (_req, res) => {
     res.json({
       status: isConnected ? 'ok' : 'error',
       timestamp: new Date().toISOString(),
-      service: 'MyPOS Multi-Tenant SaaS Platform',
+      service: 'Multi-Tenant POS SaaS Platform',
       database: {
         engine: 'PostgreSQL (Strict Tenant Isolation)',
         connected: isConnected,
@@ -212,14 +251,6 @@ const isServerless = Boolean(
 );
 
 async function startServer() {
-  try {
-    await pgClient.waitReady;
-    await ensureSaasControlPlane();
-    dbInitialized = true;
-  } catch (error) {
-    console.error('Failed to initialize PostgreSQL database:', error);
-  }
-
   if (process.env.NODE_ENV !== 'production' && !isServerless) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -236,8 +267,16 @@ async function startServer() {
 
   if (!isServerless) {
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 MyPOS Multi-Tenant SaaS Server running on http://localhost:${PORT}`);
+      console.log(`🚀 Multi-Tenant POS SaaS Server running on http://localhost:${PORT}`);
     });
+  }
+
+  try {
+    await pgClient.waitReady;
+    await ensureSaasControlPlane();
+    dbInitialized = true;
+  } catch (error) {
+    console.error('Failed to initialize PostgreSQL database:', error);
   }
 }
 

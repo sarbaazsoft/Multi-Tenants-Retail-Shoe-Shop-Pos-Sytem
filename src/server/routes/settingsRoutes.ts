@@ -235,14 +235,15 @@ function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?:
   const mode = String(s.pricing_mode || 'FIXED').toUpperCase() === 'NEGOTIABLE' ? 'NEGOTIABLE' : 'FIXED';
   const isSetupLocked = Boolean(
     tenantRow
-      ? tenantRow.onboarding_completed || tenantRow.is_onboarded || s.pricing_policy_locked || s.is_installed
+      ? tenantRow.onboarding_completed || s.pricing_policy_locked || s.is_installed
       : s.pricing_policy_locked || s.is_installed
   );
   const locked = isSetupLocked;
-  const logo = s.logo || tenantRow?.logo_url || '';
+  const logo = s.logo || '';
   const receiptLogo = s.receipt_logo || logo || '';
   const showReceiptLogo = Boolean(s.show_receipt_logo);
   const subInfo = buildSubscriptionInfo(tenantRow, pendingRenewalRequest);
+  const storeName = tenantRow?.name || s.name || 'Retail Store';
 
     return {
       id: s.id,
@@ -264,14 +265,14 @@ function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?:
     subscriptionInfo: subInfo,
     themeColor: tenantRow?.theme_color || '#2563EB',
     backgroundColor: tenantRow?.background_color || '#ffffff',
-    isOnboarded: tenantRow ? Boolean(tenantRow.is_onboarded || tenantRow.onboarding_completed) : true,
+    isOnboarded: tenantRow ? Boolean(tenantRow.onboarding_completed) : true,
     onboardingCompleted: isSetupLocked,
     onboarding_completed: isSetupLocked,
     initialSetupLocked: isSetupLocked,
     initial_setup_locked: isSetupLocked,
-    name: s.name,
-    companyName: s.name,
-    company_name: s.name,
+    name: storeName,
+    companyName: storeName,
+    company_name: storeName,
     phone: s.phone || '',
     companyPhone: s.phone || '',
     company_phone: s.phone || '',
@@ -282,10 +283,10 @@ function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?:
     companyAddress: s.address || '',
     company_address: s.address || '',
     strn: s.strn || '',
-    taxId: s.tax_id || s.tax_number || '',
-    tax_id: s.tax_id || s.tax_number || '',
-    taxNumber: s.tax_number || s.tax_id || '',
-    tax_number: s.tax_number || s.tax_id || '',
+    taxId: s.tax_id || '',
+    tax_id: s.tax_id || '',
+    taxNumber: s.tax_id || '',
+    tax_number: s.tax_id || '',
     website: s.website || '',
     logo,
     receiptLogo,
@@ -301,8 +302,8 @@ function formatSettingsResponse(s: any, tenantRow?: any, pendingRenewalRequest?:
     invoice_prefix: s.invoice_prefix || 'INV-',
     purchasePrefix: s.purchase_prefix || 'PUR-',
     purchase_prefix: s.purchase_prefix || 'PUR-',
-    barcodePrefix: s.barcode_prefix || '0108923',
-    barcode_prefix: s.barcode_prefix || '0108923',
+    barcodePrefix: s.barcode_prefix || '',
+    barcode_prefix: s.barcode_prefix || '',
     invoiceFooter: s.invoice_footer || '',
     invoice_footer: s.invoice_footer || '',
     lowStockLimit: s.low_stock_limit,
@@ -358,10 +359,16 @@ router.post('/renew-subscription', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Store tenant not found.' });
     }
 
-    const csRes = await pgClient
-      .query('SELECT name, email, phone, address FROM company_settings WHERE tenant_id = $1 LIMIT 1', [tenantRow.id])
-      .catch(() => ({ rows: [] as any[] }));
+    const [csRes, ownerRes] = await Promise.all([
+      pgClient
+        .query('SELECT email, phone, address FROM company_settings WHERE tenant_id = $1 LIMIT 1', [tenantRow.id])
+        .catch(() => ({ rows: [] as any[] })),
+      pgClient
+        .query("SELECT email, phone FROM users WHERE tenant_id = $1 AND role = 'ADMIN' ORDER BY id ASC LIMIT 1", [tenantRow.id])
+        .catch(() => ({ rows: [] as any[] })),
+    ]);
     const cs = csRes.rows[0] || {};
+    const ownerUser = ownerRes.rows[0] || {};
 
     const requestedPlan = normalizeSubscriptionPlan(
       req.body?.plan || req.body?.subscriptionPlan || tenantRow.subscription_plan || 'YEARLY'
@@ -372,16 +379,16 @@ router.post('/renew-subscription', async (req: Request, res: Response) => {
       ? `[RENEWAL REQUEST • ${planLabel} • Key: ${tenantRow.app_key || 'N/A'}] ${customNote}`
       : `Subscription renewal/extension request (${planLabel}) for store ${tenantRow.name} • App Key: ${tenantRow.app_key || 'N/A'}`;
 
-    const storeName = String(cs.name || tenantRow.name || tenantRow.slug).trim();
-    const ownerName = String(tenantRow.owner_name || `${storeName} Owner`).trim();
-    const ownerEmail = String(tenantRow.owner_email || cs.email || `admin@${tenantRow.slug}.com`).trim().toLowerCase();
-    const ownerPhone = String(tenantRow.owner_phone || cs.phone || '').trim();
-    const businessAddress = String(tenantRow.business_address || tenantRow.address || cs.address || '').trim();
+    const storeName = String(tenantRow.name || tenantRow.slug).trim();
+    const ownerEmail = String(ownerUser.email || cs.email || `admin@${tenantRow.slug}.com`).trim().toLowerCase();
+    const ownerPhone = String(ownerUser.phone || cs.phone || '').trim();
+    const businessAddress = String(cs.address || '').trim();
 
     await pgClient.exec(`
       ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS request_type TEXT NOT NULL DEFAULT 'NEW_STORE';
       ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
       ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS provisioned_tenant_id INTEGER;
+      ALTER TABLE store_requests DROP COLUMN IF EXISTS owner_name;
     `).catch(() => {});
 
     // Clear any prior deletion tombstone for this store slug when a new renewal request is submitted
@@ -408,18 +415,16 @@ router.post('/renew-subscription', async (req: Request, res: Response) => {
              notes = $2,
              provisioned_tenant_id = $3,
              store_name = $4,
-             owner_name = $5,
-             owner_email = $6,
-             owner_phone = $7,
+             owner_email = $5,
+             owner_phone = $6,
              updated_at = NOW()
-         WHERE id = $8
+         WHERE id = $7
          RETURNING *`,
         [
           requestedPlan,
           fullNotes,
           tenantRow.id,
           storeName,
-          ownerName,
           ownerEmail,
           ownerPhone,
           existingPending.rows[0].id,
@@ -429,15 +434,14 @@ router.post('/renew-subscription', async (req: Request, res: Response) => {
     } else {
       const insertedReq = await pgClient.query<any>(
         `INSERT INTO store_requests (
-           store_name, requested_slug, owner_name, owner_email, owner_phone,
+           store_name, requested_slug, owner_email, owner_phone,
            business_address, plan, request_type, notes, status, provisioned_tenant_id, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'RENEWAL', $8, 'PENDING', $9, NOW(), NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, 'RENEWAL', $7, 'PENDING', $8, NOW(), NOW())
          RETURNING *`,
         [
           storeName,
           tenantRow.slug,
-          ownerName,
           ownerEmail,
           ownerPhone,
           businessAddress,
@@ -526,8 +530,8 @@ router.get('/', async (req: Request, res: Response) => {
         invoice_prefix: 'INV-',
         purchasePrefix: 'PUR-',
         purchase_prefix: 'PUR-',
-        barcodePrefix: '0108923',
-        barcode_prefix: '0108923',
+        barcodePrefix: '',
+        barcode_prefix: '',
         pricingPolicy: 'FIXED',
         pricing_policy: 'FIXED',
         pricingMode: 'FIXED',
@@ -584,19 +588,18 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
     );
 
     const tenantLockRes = await pgClient
-      .query<{ onboarding_completed: boolean; is_onboarded: boolean }>(
-        'SELECT onboarding_completed, is_onboarded FROM tenants WHERE id = $1 LIMIT 1',
+      .query<{ onboarding_completed: boolean }>(
+        'SELECT onboarding_completed FROM tenants WHERE id = $1 LIMIT 1',
         [tenantId]
       )
-      .catch(() => ({ rows: [] as Array<{ onboarding_completed: boolean; is_onboarded: boolean }> }));
+      .catch(() => ({ rows: [] as Array<{ onboarding_completed: boolean }> }));
 
     const currentRow = currentSettingsRes.rows[0];
     const tenantLockRow = tenantLockRes.rows[0];
     const isSetupAlreadyLocked = Boolean(
       currentRow?.pricing_policy_locked ||
         currentRow?.is_installed ||
-        tenantLockRow?.onboarding_completed ||
-        tenantLockRow?.is_onboarded
+        tenantLockRow?.onboarding_completed
     );
 
     let pricingMode = String(currentRow?.pricing_mode || 'FIXED').toUpperCase() === 'NEGOTIABLE' ? 'NEGOTIABLE' : 'FIXED';
@@ -632,11 +635,6 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
     if (!finalCurrencySymbol) {
       return res.status(400).json({ error: 'currency_symbol is required (e.g., "Rs.", "$", "PKR").' });
     }
-    if (!/^\d{7}$/.test(finalBarcodePrefix)) {
-      return res.status(400).json({
-        error: 'barcode_prefix must be strictly 7 numeric digits (e.g., 0108923 or 2000001).',
-      });
-    }
     if (!finalPurchasePrefix) {
       return res.status(400).json({ error: 'purchase_prefix is required (e.g., "PO-").' });
     }
@@ -648,16 +646,15 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
     if (currentRow) {
       updateRes = await pgClient.query(
         `UPDATE company_settings SET
-           name = $1, phone = $2, email = $3, address = $4,
-           strn = $5, tax_id = $6, tax_number = $6, website = $7, logo = $8,
-           currency_name = $9, currency = $10, currency_symbol = $11,
-           barcode_prefix = $12, purchase_prefix = $13, invoice_prefix = $14,
-           invoice_footer = $15, low_stock_limit = $16,
-           pricing_mode = $17, pricing_policy_locked = true, is_installed = true, show_receipt_logo = $18, receipt_logo = $19, updated_at = NOW()
-         WHERE id = $20 AND tenant_id = $21
+           phone = $1, email = $2, address = $3,
+           strn = $4, tax_id = $5, website = $6, logo = $7,
+           currency_name = $8, currency = $9, currency_symbol = $10,
+           barcode_prefix = $11, purchase_prefix = $12, invoice_prefix = $13,
+           invoice_footer = $14, low_stock_limit = $15,
+           pricing_mode = $16, pricing_policy_locked = true, is_installed = true, show_receipt_logo = $17, receipt_logo = $18, updated_at = NOW()
+         WHERE id = $19 AND tenant_id = $20
          RETURNING *`,
         [
-          companyName,
           companyPhone,
           companyEmail,
           companyAddress,
@@ -683,14 +680,13 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
     } else {
       updateRes = await pgClient.query(
         `INSERT INTO company_settings (
-           tenant_id, name, phone, email, address, strn, tax_id, tax_number, website, logo,
+           tenant_id, phone, email, address, strn, tax_id, website, logo,
            currency_name, currency, currency_symbol, barcode_prefix, purchase_prefix, invoice_prefix,
            invoice_footer, low_stock_limit, pricing_mode, pricing_policy_locked, show_receipt_logo, receipt_logo, is_installed
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, true, $19, $20, true)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true, $18, $19, true)
          RETURNING *`,
         [
           tenantId,
-          companyName,
           companyPhone,
           companyEmail,
           companyAddress,
@@ -713,15 +709,15 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res
       );
     }
 
-    // Sync tenant metadata and lock Initial Store Setup & POS Defaults
+    // Store name lives exclusively in tenants.name; also lock Initial Store Setup & POS Defaults
     await pgClient
       .query(
         `UPDATE tenants SET
-           name = $1, logo_url = CASE WHEN $2 != '' THEN $2 ELSE logo_url END,
-           business_address = $3, tax_id = $4, currency = $5, currency_symbol = $6,
-           onboarding_completed = true, is_onboarded = true, updated_at = NOW()
-         WHERE id = $7`,
-        [companyName, logo, companyAddress, taxId, finalCurrencyCode, finalCurrencySymbol, tenantId]
+           name = $1,
+           onboarding_completed = true,
+           updated_at = NOW()
+         WHERE id = $2`,
+        [companyName, tenantId]
       )
       .catch(() => {});
 

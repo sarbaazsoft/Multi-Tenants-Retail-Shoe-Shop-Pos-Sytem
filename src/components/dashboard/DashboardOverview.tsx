@@ -556,7 +556,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 const strokeColor = idx === 0 ? '#3B82F6' : '#8B5CF6';
 
                 return (
-                  <div key={brand.id || idx} className="flex flex-col items-center text-center min-w-0">
+                  <div key={`top-brand-${brand.id || brand.name || idx}-${idx}`} className="flex flex-col items-center text-center min-w-0">
                     <div className="relative w-20 h-20 sm:w-24 sm:h-24 max-w-full flex items-center justify-center shrink-0">
                       <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                         {/* Track */}

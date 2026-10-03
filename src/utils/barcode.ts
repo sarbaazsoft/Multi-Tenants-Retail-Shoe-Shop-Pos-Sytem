@@ -1,72 +1,49 @@
 /**
- * AUTOMATIC BARCODE LOGIC (EAN-13 STANDARD)
+ * AUTOMATIC BARCODE LOGIC (CODE-128 DEFAULT, NO PREFIX, NO ZERO-PADDING)
  *
- * Requirements:
- * 1. Remove Product Variants Completely:
- *    - Each product has exactly: 1 Product, 1 SKU, 1 Barcode.
- *    - No color code, no size code, no variant code.
- * 2. Barcode Prefix Must Come From Settings:
- *    - Prefix must be exactly 7 digits.
- *    - Read the prefix from Settings (company_settings.barcode_prefix).
- *    - Do NOT hardcode the prefix, do NOT generate a new prefix automatically.
- *    - The prefix is placed directly at the beginning of the barcode.
- *    - If prefix is not 7 digits, fail validation.
- * 3. 5-Digit Product ID:
- *    - Product ID portion must ALWAYS be exactly 5 digits (padded with leading zeros, e.g. 00001).
- *    - If Product ID > 99999, show a clear validation error.
- * 4. Check Digit:
- *    - 13th digit is calculated using standard EAN-13 / GTIN-13 Modulo-10 algorithm.
- *    - Formula: 13-Digit Barcode = [Prefix (7)] + [Padded Product ID (5)] + [Check Digit (1)] = 13 digits.
+ * Final Architecture Plan:
+ * 1. Default Store Barcode Format: Code-128 (Variable-length alphanumeric/numeric)
+ *    - No 7-digit barcode prefix required.
+ *    - No leading zero-padding on Product ID (uses exact store product number: 1, 7, 9, 12, 129...).
+ *    - Formula: [2-Letter Category Code]-[Exact Store Product ID] (e.g., "SN-9", "BO-7", "TD-12", "CA-129")
+ *      or exact product number if no category is given.
+ * 2. Full Manufacturer Barcode Override Support:
+ *    - Cashiers/Admins can override the designed Code-128 barcode with the shoe box's own barcode:
+ *      Code-128 (any length), EAN-13 (13 digits), UPC-A (12 digits), or EAN-8 (8 digits).
+ *    - Overriding the barcode NEVER adds the product's ID to deleted_product_ids, keeping store
+ *      product counts, Articles, and SKUs 100% synchronized without collision.
  */
 
+import { parseCategoryPrefix } from './sku.ts';
+
 /**
- * Validates whether the given string is a valid 7-digit numeric prefix.
+ * Validates barcode prefix (kept non-blocking for backward compatibility since prefix is no longer required).
  */
-export function validateBarcodePrefix(prefix: string | undefined | null): { isValid: boolean; error?: string } {
-  const clean = String(prefix || '').replace(/\D/g, '');
-  if (clean.length !== 7) {
-    return {
-      isValid: false,
-      error: `Barcode prefix must be exactly 7 numeric digits (currently ${clean.length} digits). Please configure a 7-digit prefix in Settings.`,
-    };
-  }
+export function validateBarcodePrefix(_prefix?: string | undefined | null): { isValid: boolean; error?: string } {
   return { isValid: true };
 }
 
 /**
- * Sanitizes and guarantees a 7-digit numeric prefix from Settings.
+ * Sanitizes prefix if provided (backward compatibility helper).
  */
-export function sanitizePrefix(prefix: string | undefined | null, defaultPrefix: string = '0108923'): string {
+export function sanitizePrefix(prefix: string | undefined | null, defaultPrefix: string = ''): string {
   const digits = String(prefix || '').replace(/\D/g, '');
-  if (digits.length === 7) return digits;
-  if (digits.length > 7) return digits.slice(0, 7);
-  return (digits + defaultPrefix).slice(0, 7);
+  return digits || defaultPrefix;
 }
 
 /**
- * Formats a Product ID into strictly 5 numeric digits with leading zeros (00001 - 99999).
- * If product ID > 99999, throws an explicit validation error.
+ * Formats a Product ID as an exact positive integer string without zero-padding (e.g. "1", "7", "9", "12", "129").
  */
 export function formatProductId(productId: number | string): string {
   const parsed = parseInt(String(productId).replace(/\D/g, ''), 10);
   if (isNaN(parsed) || parsed < 1) {
-    return '00001';
+    return '1';
   }
-  if (parsed > 99999) {
-    throw new Error(`Product ID #${parsed} exceeds 99,999 limit for 5-digit barcode encoding.`);
-  }
-  return String(parsed).padStart(5, '0');
+  return String(parsed);
 }
 
 /**
  * Calculates standard EAN-13 Modulo-10 check digit for a 12-digit numeric string.
- *
- * Algorithm:
- * 1. Sum the digits at odd positions (1st, 3rd, 5th, 7th, 9th, 11th - indices 0, 2, 4, 6, 8, 10), weight = 1
- * 2. Sum the digits at even positions (2nd, 4th, 6th, 8th, 10th, 12th - indices 1, 3, 5, 7, 9, 11), weight = 3
- * 3. Total = oddSum + (evenSum * 3)
- * 4. Remainder = Total % 10
- * 5. Check Digit = (10 - Remainder) % 10
  */
 export function calculateEan13CheckDigit(twelveDigits: string): number {
   const cleanDigits = String(twelveDigits).replace(/\D/g, '').slice(0, 12);
@@ -77,7 +54,6 @@ export function calculateEan13CheckDigit(twelveDigits: string): number {
   let sum = 0;
   for (let i = 0; i < 12; i++) {
     const digit = parseInt(cleanDigits[i], 10);
-    // Index 0 is 1st position (odd, weight 1), Index 1 is 2nd position (even, weight 3)
     sum += digit * (i % 2 === 0 ? 1 : 3);
   }
 
@@ -86,53 +62,65 @@ export function calculateEan13CheckDigit(twelveDigits: string): number {
 }
 
 export interface Ean13BarcodeResult {
-  barcode: string;           // 13-digit full EAN-13 barcode
-  prefix: string;            // 7-digit prefix from Settings
-  paddedProductId: string;   // 5-digit zero-padded product ID (e.g. 00001, 00012, 00111)
-  checkDigit: number;        // 1-digit Modulo-10 check digit
-  formula: string;           // Visual breakdown: e.g. "0108923-00001-8"
+  barcode: string;           // Short Code-128 barcode (e.g. "CA-9" or "SN-12")
+  prefix: string;            // Category prefix (e.g. "CA", "SN", "TD")
+  paddedProductId: string;   // Exact unpadded product ID string (e.g. "9", "12", "129")
+  productId: number;         // Exact product ID number
+  checkDigit: number;        // 0 (not needed for Code-128)
+  format: 'CODE128';
+  formula: string;           // e.g. "SN-9"
 }
 
 /**
- * Generates an automatic 13-digit EAN-13 barcode:
- * Formula: [Prefix from Settings (7)] + [Padded Product ID (5)] + [Check Digit (1)] = 13 Digits
- *
- * @param prefix 7-digit prefix from Settings
- * @param productId Product ID integer (1 to 99999)
+ * Generates an automatic minimum-length Code-128 barcode without barcode prefix or zero-padding:
+ * Formula: [2-Letter Category Code]-[Exact Store Product ID] (e.g. "CA-9", "SN-12", "TD-129")
  */
-export function generateEan13Barcode(
-  prefix: string | undefined | null,
-  productId: number | string
+export function generateCode128Barcode(
+  productId: number | string,
+  categoryOrPrefix?: string | null
 ): Ean13BarcodeResult {
-  const cleanPrefix = String(prefix || '').replace(/\D/g, '');
-  if (cleanPrefix.length !== 7) {
-    throw new Error(
-      `Barcode prefix must be exactly 7 digits. Got "${cleanPrefix}" (${cleanPrefix.length} digits). Please configure your 7-digit prefix in Settings.`
-    );
-  }
+  const prodIdNum = Math.max(1, parseInt(String(productId ?? '1').replace(/\D/g, ''), 10) || 1);
+  const exactIdStr = String(prodIdNum);
 
-  const prodIdNum = parseInt(String(productId).replace(/\D/g, ''), 10);
-  if (isNaN(prodIdNum) || prodIdNum < 1) {
-    throw new Error('Valid positive Product ID is required to generate barcode.');
-  }
-  if (prodIdNum > 99999) {
-    throw new Error(
-      `Product ID #${prodIdNum} exceeds 99,999. The system supports 5-digit product barcodes up to ID 99999.`
-    );
-  }
+  const rawCat = String(categoryOrPrefix || '').trim();
+  // If rawCat is a numeric old prefix like '0108923', ignore it and use 'CA' or clean category prefix
+  const isLegacyNumericPrefix = /^\d+$/.test(rawCat);
+  const catPrefix =
+    !rawCat || isLegacyNumericPrefix
+      ? 'CA'
+      : /^[A-Z]{2}$/i.test(rawCat)
+      ? rawCat.toUpperCase()
+      : parseCategoryPrefix(rawCat);
 
-  const paddedProductId = String(prodIdNum).padStart(5, '0');
-  const first12 = `${cleanPrefix}${paddedProductId}`;
-  const checkDigit = calculateEan13CheckDigit(first12);
-  const barcode = `${first12}${checkDigit}`;
+  const barcode = `${catPrefix}-${exactIdStr}`;
 
   return {
     barcode,
-    prefix: cleanPrefix,
-    paddedProductId,
-    checkDigit,
-    formula: `${cleanPrefix}-${paddedProductId}-${checkDigit}`,
+    prefix: catPrefix,
+    paddedProductId: exactIdStr,
+    productId: prodIdNum,
+    checkDigit: 0,
+    format: 'CODE128',
+    formula: barcode,
   };
+}
+
+/**
+ * Backward-compatible generator used across the app:
+ * Now generates the short store Code-128 barcode without prefix or zero-padding.
+ * Signature supports:
+ * - generateEan13Barcode(categoryOrPrefix, productId)
+ * - generateEan13Barcode(productId)
+ */
+export function generateEan13Barcode(
+  prefixOrCategory: string | number | undefined | null,
+  productId?: number | string,
+  categoryHint?: string | null
+): Ean13BarcodeResult {
+  if (productId === undefined || productId === null) {
+    return generateCode128Barcode(prefixOrCategory || 1, categoryHint || 'CA');
+  }
+  return generateCode128Barcode(productId, categoryHint || String(prefixOrCategory || 'CA'));
 }
 
 /**
@@ -153,8 +141,7 @@ export function validateEan13(barcode: string): boolean {
 }
 
 /**
- * Parses an EAN-13 barcode into its constituent components:
- * Prefix (7), Product ID (5), Check Digit (1).
+ * Parses a store barcode (Code-128 like "SN-9" or legacy 13-digit EAN-13) to extract its product ID.
  */
 export function parseEan13Barcode(barcode: string): {
   isValid: boolean;
@@ -164,21 +151,43 @@ export function parseEan13Barcode(barcode: string): {
   checkDigit: number;
 } | null {
   if (!barcode) return null;
-  const clean = String(barcode).trim().replace(/\D/g, '');
-  if (clean.length !== 13) return null;
+  const raw = String(barcode).trim().toUpperCase();
 
-  const prefix = clean.slice(0, 7);
-  const paddedProductId = clean.slice(7, 12);
-  const checkDigit = parseInt(clean[12], 10);
-  const isValid = validateEan13(clean);
+  // Check store Code-128 format: e.g. "SN-9", "TD-12", "CA-129"
+  const code128Match = raw.match(/^([A-Z]{2})-?(\d+)$/);
+  if (code128Match) {
+    const prefix = code128Match[1];
+    const idStr = code128Match[2];
+    const prodId = parseInt(idStr, 10);
+    if (!isNaN(prodId) && prodId >= 1) {
+      return {
+        isValid: true,
+        prefix,
+        productId: prodId,
+        paddedProductId: String(prodId),
+        checkDigit: 0,
+      };
+    }
+  }
 
-  return {
-    isValid,
-    prefix,
-    productId: parseInt(paddedProductId, 10),
-    paddedProductId,
-    checkDigit,
-  };
+  // Legacy 13-digit EAN-13
+  const clean = raw.replace(/\D/g, '');
+  if (clean.length === 13) {
+    const prefix = clean.slice(0, 7);
+    const paddedProductId = clean.slice(7, 12);
+    const checkDigit = parseInt(clean[12], 10);
+    const isValid = validateEan13(clean);
+
+    return {
+      isValid,
+      prefix,
+      productId: parseInt(paddedProductId, 10),
+      paddedProductId,
+      checkDigit,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -217,7 +226,7 @@ export function calculateEan8CheckDigit(sevenDigits: string): number {
 
 export interface BarcodeAnalysis {
   isValid: boolean;
-  standard: 'STORE_EAN13' | 'EAN13' | 'UPCA' | 'EAN8' | 'CODE128' | 'INVALID';
+  standard: 'STORE_CODE128' | 'CODE128' | 'STORE_EAN13' | 'EAN13' | 'UPCA' | 'EAN8' | 'INVALID';
   standardLabel: string;
   expectedCheckDigit?: number;
   actualCheckDigit?: number;
@@ -226,10 +235,11 @@ export interface BarcodeAnalysis {
 }
 
 /**
- * Analyzes any scanned or entered barcode string, identifies standard,
- * calculates expected checksums for retail codes, and checks validity.
+ * Analyzes any scanned or entered barcode string:
+ * - Accepts Store Code-128 (e.g. SN-9, TD-12, CA-129) and any length Code-128 (1 to 64 chars)
+ * - Validates 13-digit EAN-13, 12-digit UPC-A, and 8-digit EAN-8 manufacturer barcodes (and falls back to Code-128 if non-standard numeric)
  */
-export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): BarcodeAnalysis {
+export function analyzeBarcode(barcodeRaw: string, _storePrefix?: string): BarcodeAnalysis {
   const raw = String(barcodeRaw || '').trim();
   if (!raw) {
     return {
@@ -240,12 +250,12 @@ export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): Barcod
     };
   }
 
-  if (raw.length < 3 || raw.length > 64) {
+  if (raw.length < 1 || raw.length > 64) {
     return {
       isValid: false,
       standard: 'INVALID',
       standardLabel: 'Invalid Length',
-      error: `Barcode length must be 3 to 64 characters (currently ${raw.length}).`,
+      error: `Barcode length must be between 1 and 64 characters (currently ${raw.length}).`,
     };
   }
 
@@ -260,39 +270,45 @@ export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): Barcod
 
   const cleanDigits = raw.replace(/\D/g, '');
   const isPureNumeric = cleanDigits.length === raw.length;
-  const cleanPrefix = storePrefix ? String(storePrefix).replace(/\D/g, '') : '';
 
-  // 13-digit EAN-13
+  // Check if it matches Store Standard Code-128: [2-letter category]-[exact id] (e.g., SN-9, TD-12, CA-129)
+  if (/^[A-Za-z]{2,3}-\d+$/i.test(raw)) {
+    return {
+      isValid: true,
+      standard: 'STORE_CODE128',
+      standardLabel: 'Store Standard Code-128 (Compact)',
+    };
+  }
+
+  // 13-digit numeric: Check EAN-13 first, or accept as 13-digit Code-128
   if (isPureNumeric && raw.length === 13) {
     const first12 = raw.slice(0, 12);
     const actual = parseInt(raw[12], 10);
     const expected = calculateEan13CheckDigit(first12);
     const matches = actual === expected;
-    const isStore = cleanPrefix && raw.startsWith(cleanPrefix);
 
     if (matches) {
       return {
         isValid: true,
-        standard: isStore ? 'STORE_EAN13' : 'EAN13',
-        standardLabel: isStore ? `Store Standard EAN-13 (${cleanPrefix})` : 'International EAN-13 (Standard Retail)',
+        standard: 'EAN13',
+        standardLabel: 'EAN-13 (13-Digit Retail Standard)',
         expectedCheckDigit: expected,
         actualCheckDigit: actual,
       };
     } else {
       const fixedCode = `${first12}${expected}`;
       return {
-        isValid: false,
-        standard: 'EAN13',
-        standardLabel: 'EAN-13 Check Digit Mismatch',
+        isValid: true,
+        standard: 'CODE128',
+        standardLabel: 'Code-128 Numeric (13-Digit Box Code)',
         expectedCheckDigit: expected,
         actualCheckDigit: actual,
         suggestedFix: fixedCode,
-        error: `Invalid EAN-13 check digit: Expected "${expected}", but got "${actual}".`,
       };
     }
   }
 
-  // 12-digit UPC-A (Standard US / Imported boxes)
+  // 12-digit numeric: Check UPC-A first, or accept as 12-digit Code-128
   if (isPureNumeric && raw.length === 12) {
     const first11 = raw.slice(0, 11);
     const actual = parseInt(raw[11], 10);
@@ -310,18 +326,17 @@ export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): Barcod
     } else {
       const fixedCode = `${first11}${expected}`;
       return {
-        isValid: false,
-        standard: 'UPCA',
-        standardLabel: 'UPC-A Check Digit Mismatch',
+        isValid: true,
+        standard: 'CODE128',
+        standardLabel: 'Code-128 Numeric (12-Digit Box Code)',
         expectedCheckDigit: expected,
         actualCheckDigit: actual,
         suggestedFix: fixedCode,
-        error: `Invalid UPC-A check digit: Expected "${expected}", but got "${actual}".`,
       };
     }
   }
 
-  // 8-digit EAN-8
+  // 8-digit numeric: Check EAN-8 first, or accept as 8-digit Code-128
   if (isPureNumeric && raw.length === 8) {
     const first7 = raw.slice(0, 7);
     const actual = parseInt(raw[7], 10);
@@ -339,23 +354,24 @@ export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): Barcod
     } else {
       const fixedCode = `${first7}${expected}`;
       return {
-        isValid: false,
-        standard: 'EAN8',
-        standardLabel: 'EAN-8 Check Digit Mismatch',
+        isValid: true,
+        standard: 'CODE128',
+        standardLabel: 'Code-128 Numeric (8-Digit Box Code)',
         expectedCheckDigit: expected,
         actualCheckDigit: actual,
         suggestedFix: fixedCode,
-        error: `Invalid EAN-8 check digit: Expected "${expected}", but got "${actual}".`,
       };
     }
   }
 
-  // Code-128 / Alphanumeric manufacturer box code
+  // Code-128 / Any length alphanumeric or numeric code (e.g. 9, 12, 129, SN-9, NK-AIR-90)
   if (/^[A-Za-z0-9_\-\.\:\/\#\s]+$/.test(raw)) {
     return {
       isValid: true,
       standard: 'CODE128',
-      standardLabel: 'Manufacturer / Box Code (Code-128)',
+      standardLabel: isPureNumeric
+        ? `Code-128 Compact Numeric (${raw.length} chars)`
+        : 'Code-128 Barcode (Variable Length)',
     };
   }
 
@@ -363,7 +379,6 @@ export function analyzeBarcode(barcodeRaw: string, storePrefix?: string): Barcod
     isValid: false,
     standard: 'INVALID',
     standardLabel: 'Invalid Characters',
-    error: 'Barcode contains unsupported special characters.',
+    error: 'Barcode contains unsupported non-ASCII characters.',
   };
 }
-

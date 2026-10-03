@@ -278,8 +278,8 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
     try {
       const res = await api.purchases.list({ search: searchTerm.trim() || undefined });
       setPurchases(res.purchases || []);
-    } catch (e) {
-      console.error('Failed to load purchases:', e);
+    } catch (e: any) {
+      console.warn('Notice loading purchases:', e?.message || e);
     } finally {
       isRefreshingPurchasesRef.current = false;
       setIsLoading(false);
@@ -294,8 +294,8 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
     try {
       const res = await api.purchaseReturns.list({ search: searchTerm.trim() || undefined });
       setPurchaseReturns(res.returns || []);
-    } catch (e) {
-      console.error('Failed to load purchase returns:', e);
+    } catch (e: any) {
+      console.warn('Notice loading purchase returns:', e?.message || e);
     } finally {
       isRefreshingReturnsRef.current = false;
       setIsLoadingReturns(false);
@@ -314,7 +314,7 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
         setIsReturnDetailsModalOpen(true);
       }
     } catch (e: any) {
-      console.error('Failed to load purchase return details:', e);
+      console.warn('Notice loading purchase return details:', e?.message || e);
     }
   };
 
@@ -322,8 +322,8 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
     try {
       const res = await api.products.list();
       setProducts(res.products || []);
-    } catch (e) {
-      console.error('Failed to load products:', e);
+    } catch (e: any) {
+      console.warn('Notice loading products:', e?.message || e);
     }
   };
 
@@ -342,8 +342,28 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
           }
         } catch (_) {}
       }
-      setBrands(brandList);
-      setCategories(cRes.categories || []);
+
+      const seenB = new Set<string>();
+      const dedupedBrands: any[] = [];
+      for (const b of brandList) {
+        const name = (typeof b === 'string' ? b : b.name || '').trim();
+        if (name && !seenB.has(name.toLowerCase())) {
+          seenB.add(name.toLowerCase());
+          dedupedBrands.push(typeof b === 'string' ? { id: name, name } : b);
+        }
+      }
+      setBrands(dedupedBrands);
+
+      const seenC = new Set<string>();
+      const dedupedCats: any[] = [];
+      for (const c of (cRes.categories || [])) {
+        const name = (typeof c === 'string' ? c : c.name || '').trim();
+        if (name && !seenC.has(name.toLowerCase())) {
+          seenC.add(name.toLowerCase());
+          dedupedCats.push(typeof c === 'string' ? { id: name, name } : c);
+        }
+      }
+      setCategories(dedupedCats);
     } catch (e) {
       console.error(e);
     }
@@ -2714,10 +2734,10 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-500/20 border border-slate-200 dark:border-purple-400/40 rounded-xl outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 font-medium text-slate-900 dark:text-purple-200 hover:bg-slate-100 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] text-xs shadow-2xs cursor-pointer"
                 >
                   <option value="ALL" className="dark:bg-[#120726] dark:text-purple-100">All Brands</option>
-                  {brands.map((b) => {
+                  {brands.map((b, idx) => {
                     const isLocal = b.name?.trim().toLowerCase() === 'local';
                     return (
-                      <option key={b.id} value={b.id} className="dark:bg-[#120726] dark:text-purple-100">
+                      <option key={`pm-brand-opt-${b.id || b.name || idx}`} value={b.id} className="dark:bg-[#120726] dark:text-purple-100">
                         {b.name} {isLocal ? '(Default)' : ''}
                       </option>
                     );
@@ -2732,8 +2752,8 @@ export const PurchaseManagement: React.FC<PurchaseManagementProps> = ({
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-500/20 border border-slate-200 dark:border-purple-400/40 rounded-xl outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 font-medium text-slate-900 dark:text-purple-200 hover:bg-slate-100 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] text-xs shadow-2xs cursor-pointer"
                 >
                   <option value="ALL" className="dark:bg-[#120726] dark:text-purple-100">All Categories</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id} className="dark:bg-[#120726] dark:text-purple-100">
+                  {categories.map((c, idx) => (
+                    <option key={`pm-cat-opt-${c.id || c.name || idx}`} value={c.id} className="dark:bg-[#120726] dark:text-purple-100">
                       {c.name}
                     </option>
                   ))}

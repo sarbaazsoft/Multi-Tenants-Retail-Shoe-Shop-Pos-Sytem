@@ -100,7 +100,7 @@ function detectInitialRouteFromLocation(): {
 
   const domainParam = searchParams.get('domain');
   if (domainParam) {
-    const sub = domainParam.replace(/\.mypos\.com$/i, '').toLowerCase();
+    const sub = domainParam.split('.')[0].trim().toLowerCase();
     if (sub === 'admin') {
       return { mode: 'SUPERADMIN', slug: null, requestedSlugParam };
     }
@@ -192,9 +192,9 @@ export default function App() {
 
   const pwaAppName =
     saasMode === 'SUPERADMIN'
-      ? 'MyPOS SaaS C-Panel'
+      ? 'POS SaaS C-Panel'
       : saasMode === 'LANDING'
-      ? 'MyPOS — Multi-Tenant Retail POS Cloud'
+      ? 'Multi-Tenant Retail POS Cloud'
       : `${effectiveStoreName} — POS Terminal`;
 
   // Dynamically update <link rel="manifest"> and <meta name="theme-color"> per tenant or SuperAdmin PWA
@@ -609,7 +609,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full flex flex-col bg-slate-100 dark:bg-[#0A0E1A] text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors duration-200">
-      {/* 1. ROOT DOMAIN SAAS LANDING PAGE (`mypos.com`) */}
+      {/* 1. ROOT DOMAIN SAAS LANDING PAGE */}
       {saasMode === 'LANDING' && (
         <SaasLandingPage
           initialRequestedSlug={landingRequestedSlug}
@@ -621,7 +621,7 @@ export default function App() {
         />
       )}
 
-      {/* 2. SUPERADMIN CONTROL PANEL (`mypos.com/admin`) */}
+      {/* 2. SUPERADMIN CONTROL PANEL (`/admin`) */}
       {saasMode === 'SUPERADMIN' && (
         <SuperAdminControlPanel
           currentUser={currentUser}
@@ -635,7 +635,7 @@ export default function App() {
         />
       )}
 
-      {/* 3. UNKNOWN STORE FALLBACK SCREEN (404 TENANT: e.g., `notexist.mypos.com`) */}
+      {/* 3. UNKNOWN STORE FALLBACK SCREEN (404 TENANT) */}
       {saasMode === 'TENANT_NOT_FOUND' && (
         <UnknownStore404View
           requestedSlug={requestedSlug || 'notexist'}
@@ -653,7 +653,7 @@ export default function App() {
         />
       )}
 
-      {/* 4. SUSPENDED OR EXPIRED STORE SCREEN (`mystore.mypos.com` when status = SUSPENDED or EXPIRED) */}
+      {/* 4. SUSPENDED OR EXPIRED STORE SCREEN (when status = SUSPENDED or EXPIRED) */}
       {(saasMode === 'TENANT_SUSPENDED' || saasMode === 'TENANT_EXPIRED') && (
         <SuspendedStoreView
           tenant={activeTenant}
@@ -716,7 +716,7 @@ export default function App() {
         />
       )}
 
-      {/* 6. ACTIVE TENANT POS & INVENTORY SUITE (`mystore.mypos.com` / `/app/[tenant_slug]`) */}
+      {/* 6. ACTIVE TENANT POS & INVENTORY SUITE (`/app/[tenant_slug]`) */}
       {saasMode === 'TENANT_ACTIVE' && (
         <>
           {isInitializing ? (

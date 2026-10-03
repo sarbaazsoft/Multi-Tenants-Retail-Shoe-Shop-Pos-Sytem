@@ -52,7 +52,13 @@ router.post('/', async (req: Request, res: Response) => {
         invoicePrefix?: string;
         purchase_prefix?: string;
         purchasePrefix?: string;
-      }>('SELECT * FROM company_settings LIMIT 1');
+      }>(
+        `SELECT cs.*, t.name AS name
+         FROM company_settings cs
+         LEFT JOIN tenants t ON t.id = cs.tenant_id
+         ORDER BY cs.id ASC
+         LIMIT 1`
+      );
 
       if (settingsRes.rows.length > 0) {
         const row = settingsRes.rows[0];

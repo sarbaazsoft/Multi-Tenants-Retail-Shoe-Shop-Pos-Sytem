@@ -54,7 +54,6 @@ export interface SuperAdminStoreRow {
   themeColor: string;
   backgroundColor: string;
   logoUrl: string;
-  ownerName: string;
   ownerEmail: string;
   ownerPhone: string;
   address: string;
@@ -67,16 +66,67 @@ export interface SuperAdminStoreRow {
   salesCount: number;
   totalSales: number;
   staffCount: number;
+  customerCount?: number;
+  supplierCount?: number;
+  unitsSold?: number;
+  inventoryValue?: number;
   manifestUrl: string;
   appUrl: string;
   installUrl: string;
+}
+
+export interface SuperAdminReportSku {
+  id: number;
+  tenantId: number;
+  storeName: string;
+  storeSlug: string;
+  currency: string;
+  productName: string;
+  sku: string;
+  barcode: string;
+  brand: string;
+  category: string;
+  imageUrl?: string;
+  sellingPrice: number;
+  costPrice: number;
+  totalStock: number;
+  unitsSold: number;
+  totalRevenue: number;
+  orderCount: number;
+}
+
+export interface SuperAdminSevenDayPoint {
+  date: string;
+  label: string;
+  amount: number;
+  txCount: number;
+}
+
+export interface SuperAdminRecentTransaction {
+  type: string;
+  reference: string;
+  storeName: string;
+  storeSlug: string;
+  customerName: string;
+  amount: number;
+  currency: string;
+  status: string;
+  date: string;
+  timeString?: string;
+}
+
+export interface SuperAdminReportBreakdown {
+  name: string;
+  skuCount: number;
+  totalStock: number;
+  unitsSold: number;
+  totalRevenue: number;
 }
 
 export interface StoreRequestRecord {
   id: number;
   store_name: string;
   requested_slug: string;
-  owner_name: string;
   owner_email: string;
   owner_phone: string;
   plan: string;

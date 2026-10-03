@@ -17,7 +17,7 @@ const router = Router();
 
 /**
  * 1. DYNAMIC STORE PWA MANIFEST (`/api/tenants/:slug/manifest`)
- * Generates dynamic `manifest.webmanifest` for each active store (e.g., `mystore.mypos.com`).
+ * Generates dynamic `manifest.webmanifest` for each active store subdomain.
  * Dynamic Fields: `name`, `short_name`, `theme_color`, `background_color`, `icons` (Tenant Logo URL).
  * Scope Isolation: Sets `start_url` to `/app/[tenant_slug]/login` and `scope` to `/app/[tenant_slug]/`
  * so each store installs as an independent PWA.
@@ -39,9 +39,11 @@ router.get('/tenants/:slug/manifest', async (req: Request, res: Response) => {
       background_color: string;
       logo_url: string;
     }>(
-      `SELECT id, slug, name, status, theme_color, background_color, logo_url
-       FROM tenants
-       WHERE LOWER(slug) = LOWER($1)
+      `SELECT t.id, t.slug, t.name, t.status, t.theme_color, t.background_color,
+              COALESCE(NULLIF(cs.logo, ''), '/pwa-512x512.png') AS logo_url
+       FROM tenants t
+       LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+       WHERE LOWER(t.slug) = LOWER($1)
        LIMIT 1`,
       [rawSlug]
     );
@@ -70,7 +72,7 @@ router.get('/tenants/:slug/manifest', async (req: Request, res: Response) => {
       categories: ['business', 'shopping', 'finance'],
       icons: [
         {
-          src: logoUrl,
+          src: logoUrl === '/pwa-512x512.png' ? '/pwa-192x192.png' : logoUrl,
           sizes: '192x192',
           type: 'image/png',
           purpose: 'any',
@@ -82,10 +84,44 @@ router.get('/tenants/:slug/manifest', async (req: Request, res: Response) => {
           purpose: 'any',
         },
         {
+          src: '/pwa-maskable-192x192.png',
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'maskable',
+        },
+        {
           src: '/pwa-maskable-512x512.png',
           sizes: '512x512',
           type: 'image/png',
           purpose: 'maskable',
+        },
+        {
+          src: '/apple-touch-icon.png',
+          sizes: '180x180',
+          type: 'image/png',
+          purpose: 'any',
+        },
+      ],
+      shortcuts: [
+        {
+          name: 'POS Terminal',
+          short_name: 'POS',
+          description: `Open ${tenant.name} Point of Sale checkout counter`,
+          url: `/app/${tenant.slug}?tab=pos`,
+          icons: [
+            { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          ],
+        },
+        {
+          name: 'Shoe Catalog',
+          short_name: 'Catalog',
+          description: `Manage ${tenant.name} shoe inventory`,
+          url: `/app/${tenant.slug}?tab=inventory`,
+          icons: [
+            { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          ],
         },
       ],
     };
@@ -124,11 +160,15 @@ router.get('/saas/resolve', async (req: Request, res: Response) => {
       logo_url: string;
       currency: string;
       onboarding_completed: boolean;
-      is_onboarded: boolean;
     }>(
-      `SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, theme_color, background_color, logo_url, currency, onboarding_completed, is_onboarded
-       FROM tenants
-       ORDER BY id ASC`
+      `SELECT t.id, t.slug, t.name, t.status, t.app_key, t.subscription_plan,
+              t.subscription_start_date, t.subscription_end_date, t.subscription_status,
+              t.theme_color, t.background_color, t.onboarding_completed,
+              COALESCE(NULLIF(cs.logo, ''), '/pwa-512x512.png') AS logo_url,
+              COALESCE(cs.currency, 'PKR') AS currency
+       FROM tenants t
+       LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+       ORDER BY t.id ASC`
     );
 
     return res.json({
@@ -147,7 +187,7 @@ router.get('/saas/resolve', async (req: Request, res: Response) => {
         backgroundColor: t.background_color,
         logoUrl: t.logo_url,
         currency: t.currency,
-        onboardingCompleted: Boolean(t.onboarding_completed || t.is_onboarded),
+        onboardingCompleted: Boolean(t.onboarding_completed),
         subdomainUrl: t.slug,
         appPath: `/app/${t.slug}`,
         manifestUrl: `/api/tenants/${t.slug}/manifest`,
@@ -164,11 +204,11 @@ router.get('/saas/resolve', async (req: Request, res: Response) => {
 router.post('/saas/store-requests', async (req: Request, res: Response) => {
   try {
     await ensureSaasControlPlane();
-    const { storeName, requestedSlug, ownerName, ownerEmail, ownerPhone, plan } = req.body || {};
+    const { storeName, requestedSlug, ownerEmail, ownerPhone, plan } = req.body || {};
 
-    if (!storeName || !requestedSlug || !ownerName || !ownerEmail) {
+    if (!storeName || !requestedSlug || !ownerEmail) {
       return res.status(400).json({
-        error: 'Store name, subdomain slug, owner name, and email are required.',
+        error: 'Store name, subdomain slug, and email are required.',
       });
     }
 
@@ -202,13 +242,12 @@ router.post('/saas/store-requests', async (req: Request, res: Response) => {
       .catch(() => {});
 
     const insertRes = await pgClient.query<{ id: number }>(
-      `INSERT INTO store_requests (store_name, requested_slug, owner_name, owner_email, owner_phone, plan, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
+      `INSERT INTO store_requests (store_name, requested_slug, owner_email, owner_phone, plan, status)
+       VALUES ($1, $2, $3, $4, $5, 'PENDING')
        RETURNING id`,
       [
         String(storeName).trim(),
         cleanSlug,
-        String(ownerName).trim(),
         String(ownerEmail).trim().toLowerCase(),
         String(ownerPhone || '').trim(),
         String(plan || 'PRO_TRIAL').trim(),
@@ -249,7 +288,6 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
       theme_color: string;
       background_color: string;
       logo_url: string;
-      owner_name: string;
       owner_email: string;
       owner_phone: string;
       address: string;
@@ -262,15 +300,37 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
       sales_count: string;
       total_sales_revenue: string;
       staff_count: string;
+      customer_count: string;
+      supplier_count: string;
+      units_sold: string;
+      inventory_value: string;
     }>(`
       SELECT 
         t.*,
+        COALESCE(NULLIF(cs.logo, ''), '/pwa-512x512.png') AS logo_url,
+        COALESCE(u.email, cs.email, '') AS owner_email,
+        COALESCE(NULLIF(u.phone, ''), cs.phone, '') AS owner_phone,
+        COALESCE(cs.address, '') AS address,
+        COALESCE(cs.tax_id, '') AS tax_id,
+        COALESCE(cs.currency, 'PKR') AS currency,
         (SELECT COUNT(*) FROM products p WHERE p.tenant_id = t.id AND p.active = true)::text as product_count,
         (SELECT COALESCE(SUM(p.total_stock), 0) FROM products p WHERE p.tenant_id = t.id AND p.active = true)::text as total_stock_units,
         (SELECT COUNT(*) FROM sales s WHERE s.tenant_id = t.id)::text as sales_count,
         (SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s WHERE s.tenant_id = t.id)::text as total_sales_revenue,
-        (SELECT COUNT(*) FROM users u WHERE u.tenant_id = t.id AND u.role != 'SUPERADMIN')::text as staff_count
+        (SELECT COUNT(*) FROM users u2 WHERE u2.tenant_id = t.id AND u2.role != 'SUPERADMIN')::text as staff_count,
+        (SELECT COUNT(*) FROM customers c WHERE c.tenant_id = t.id)::text as customer_count,
+        (SELECT COUNT(*) FROM suppliers sp WHERE sp.tenant_id = t.id)::text as supplier_count,
+        (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si WHERE si.tenant_id = t.id)::text as units_sold,
+        (SELECT COALESCE(SUM(p.total_stock * p.selling_price), 0) FROM products p WHERE p.tenant_id = t.id AND p.active = true)::text as inventory_value
       FROM tenants t
+      LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT email, phone
+        FROM users
+        WHERE tenant_id = t.id AND role = 'ADMIN'
+        ORDER BY id ASC
+        LIMIT 1
+      ) u ON true
       ORDER BY t.id ASC
     `);
 
@@ -279,6 +339,188 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
       FROM store_requests
       ORDER BY CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END, id DESC
     `);
+
+    const topSkusRes = await pgClient
+      .query<{
+        id: number;
+        tenant_id: number;
+        store_name: string;
+        store_slug: string;
+        currency: string;
+        product_name: string;
+        sku: string;
+        barcode: string;
+        brand: string;
+        category: string;
+        primary_image_url: string;
+        selling_price: string;
+        cost_price: string;
+        total_stock: string;
+        units_sold: string;
+        total_revenue: string;
+        order_count: string;
+      }>(`
+        SELECT
+          p.id,
+          p.tenant_id,
+          t.name AS store_name,
+          t.slug AS store_slug,
+          COALESCE(cs.currency, 'PKR') AS currency,
+          COALESCE(NULLIF(TRIM(p.article), ''), p.name) AS product_name,
+          p.sku,
+          p.barcode,
+          COALESCE(NULLIF(TRIM(p.brand), ''), 'Local') AS brand,
+          COALESCE(NULLIF(TRIM(p.category), ''), 'General') AS category,
+          COALESCE(p.primary_image_url, '') AS primary_image_url,
+          COALESCE(p.selling_price, 0)::text AS selling_price,
+          COALESCE(p.cost_price, 0)::text AS cost_price,
+          COALESCE(p.total_stock, 0)::text AS total_stock,
+          COALESCE(SUM(si.quantity), 0)::text AS units_sold,
+          COALESCE(SUM(si.subtotal), 0)::text AS total_revenue,
+          COUNT(DISTINCT si.sale_id)::text AS order_count
+        FROM products p
+        JOIN tenants t ON t.id = p.tenant_id
+        LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+        LEFT JOIN sale_items si ON si.product_id = p.id AND si.tenant_id = p.tenant_id
+        WHERE p.active = true
+        GROUP BY p.id, p.tenant_id, t.name, t.slug, cs.currency, p.article, p.name, p.sku, p.barcode, p.brand, p.category, p.primary_image_url, p.selling_price, p.cost_price, p.total_stock
+        ORDER BY COALESCE(SUM(si.subtotal), 0) DESC, COALESCE(SUM(si.quantity), 0) DESC, (COALESCE(p.total_stock, 0) * COALESCE(p.selling_price, 0)) DESC
+        LIMIT 30
+      `)
+      .catch(() => ({ rows: [] }));
+
+    const sevenDaysRes = await pgClient
+      .query<{
+        date: string;
+        label: string;
+        amount: string;
+        tx_count: string;
+      }>(`
+        WITH days AS (
+          SELECT (CURRENT_DATE - i)::text AS d,
+                 TO_CHAR(CURRENT_DATE - i, 'Dy') AS label,
+                 i AS idx
+          FROM generate_series(6, 0, -1) AS i
+        )
+        SELECT days.d AS date,
+               days.label,
+               COALESCE(SUM(s.total_amount), 0)::text AS amount,
+               COUNT(s.id)::text AS tx_count
+        FROM days
+        LEFT JOIN sales s ON s.sale_date = days.d
+        GROUP BY days.d, days.label, days.idx
+        ORDER BY days.idx DESC
+      `)
+      .catch(() => ({ rows: [] }));
+
+    const recentTxRes = await pgClient
+      .query<{
+        type: string;
+        reference: string;
+        store_name: string;
+        store_slug: string;
+        customer_name: string;
+        amount: string;
+        currency: string;
+        status: string;
+        created_at: string;
+      }>(`
+        SELECT * FROM (
+          SELECT
+            'Sale' AS type,
+            s.invoice_number AS reference,
+            t.name AS store_name,
+            t.slug AS store_slug,
+            COALESCE(c.name, 'Walk-in Customer') AS customer_name,
+            s.total_amount::text AS amount,
+            COALESCE(cs.currency_symbol, 'Rs.') AS currency,
+            'Completed' AS status,
+            s.created_at
+          FROM sales s
+          JOIN tenants t ON t.id = s.tenant_id
+          LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+          LEFT JOIN customers c ON c.id = s.customer_id AND c.tenant_id = s.tenant_id
+          UNION ALL
+          SELECT
+            'Purchase' AS type,
+            pu.purchase_number AS reference,
+            t.name AS store_name,
+            t.slug AS store_slug,
+            COALESCE(pu.supplier_name, 'Supplier') AS customer_name,
+            pu.total_amount::text AS amount,
+            COALESCE(cs.currency_symbol, 'Rs.') AS currency,
+            'Received' AS status,
+            pu.created_at
+          FROM purchases pu
+          JOIN tenants t ON t.id = pu.tenant_id
+          LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+          UNION ALL
+          SELECT
+            'Return' AS type,
+            r.return_number AS reference,
+            t.name AS store_name,
+            t.slug AS store_slug,
+            'Customer Return' AS customer_name,
+            r.total_refund_amount::text AS amount,
+            COALESCE(cs.currency_symbol, 'Rs.') AS currency,
+            'Refunded' AS status,
+            r.created_at
+          FROM returns r
+          JOIN tenants t ON t.id = r.tenant_id
+          LEFT JOIN company_settings cs ON cs.tenant_id = t.id
+        ) tx
+        ORDER BY created_at DESC
+        LIMIT 8
+      `)
+      .catch(() => ({ rows: [] }));
+
+    const topCategoriesRes = await pgClient
+      .query<{
+        name: string;
+        sku_count: string;
+        total_stock: string;
+        units_sold: string;
+        total_revenue: string;
+      }>(`
+        SELECT
+          COALESCE(NULLIF(TRIM(p.category), ''), 'General') AS name,
+          COUNT(DISTINCT p.id)::text AS sku_count,
+          COALESCE(SUM(DISTINCT p.total_stock), 0)::text AS total_stock,
+          COALESCE(SUM(si.quantity), 0)::text AS units_sold,
+          COALESCE(SUM(si.subtotal), 0)::text AS total_revenue
+        FROM products p
+        JOIN tenants t ON t.id = p.tenant_id
+        LEFT JOIN sale_items si ON si.product_id = p.id AND si.tenant_id = p.tenant_id
+        WHERE p.active = true
+        GROUP BY COALESCE(NULLIF(TRIM(p.category), ''), 'General')
+        ORDER BY COALESCE(SUM(si.subtotal), 0) DESC, COUNT(DISTINCT p.id) DESC
+        LIMIT 10
+      `)
+      .catch(() => ({ rows: [] }));
+
+    const topBrandsRes = await pgClient
+      .query<{
+        name: string;
+        sku_count: string;
+        total_stock: string;
+        units_sold: string;
+        total_revenue: string;
+      }>(`
+        SELECT
+          COALESCE(NULLIF(TRIM(p.brand), ''), 'Local') AS name,
+          COUNT(DISTINCT p.id)::text AS sku_count,
+          COALESCE(SUM(DISTINCT p.total_stock), 0)::text AS total_stock,
+          COALESCE(SUM(si.quantity), 0)::text AS units_sold,
+          COALESCE(SUM(si.subtotal), 0)::text AS total_revenue
+        FROM products p
+        JOIN tenants t ON t.id = p.tenant_id
+        LEFT JOIN sale_items si ON si.product_id = p.id AND si.tenant_id = p.tenant_id
+        WHERE p.active = true
+        GROUP BY COALESCE(NULLIF(TRIM(p.brand), ''), 'Local')
+        ORDER BY COALESCE(SUM(si.subtotal), 0) DESC, COUNT(DISTINCT p.id) DESC
+        LIMIT 10
+      `)
+      .catch(() => ({ rows: [] }));
 
     const stores = storesRes.rows.map((s) => {
       const endDateIso = s.subscription_end_date ? new Date(s.subscription_end_date).toISOString() : '';
@@ -305,19 +547,22 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
         themeColor: s.theme_color || '#7C3AED',
         backgroundColor: s.background_color || '#0F172A',
         logoUrl: s.logo_url || '/pwa-512x512.png',
-        ownerName: s.owner_name || 'Store Admin',
         ownerEmail: s.owner_email || '',
         ownerPhone: s.owner_phone || '',
         address: s.address || '',
         taxId: s.tax_id || '',
         currency: s.currency || 'PKR',
-        onboardingCompleted: Boolean(s.onboarding_completed || (s as any).is_onboarded),
+        onboardingCompleted: Boolean(s.onboarding_completed),
         createdAt: s.created_at,
         productCount: parseInt(s.product_count || '0', 10),
         totalStockUnits: parseInt(s.total_stock_units || '0', 10),
         salesCount: parseInt(s.sales_count || '0', 10),
         totalSales: parseFloat(s.total_sales_revenue || '0'),
         staffCount: parseInt(s.staff_count || '0', 10),
+        customerCount: parseInt(s.customer_count || '0', 10),
+        supplierCount: parseInt(s.supplier_count || '0', 10),
+        unitsSold: parseInt(s.units_sold || '0', 10),
+        inventoryValue: parseFloat(s.inventory_value || '0'),
         manifestUrl: `/api/tenants/${s.slug}/manifest`,
         appUrl: `/app/${s.slug}`,
         installUrl: `/app/${s.slug}/install`,
@@ -329,6 +574,68 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
     const activeStoresCount = stores.filter((st) => st.status === 'ACTIVE' && st.subscriptionStatus === 'ACTIVE').length;
     const suspendedStoresCount = stores.filter((st) => st.status === 'SUSPENDED' || st.subscriptionStatus === 'SUSPENDED').length;
     const expiredStoresCount = stores.filter((st) => st.subscriptionStatus === 'EXPIRED').length;
+
+    const topSkus = topSkusRes.rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      storeName: r.store_name,
+      storeSlug: r.store_slug,
+      currency: r.currency || 'PKR',
+      productName: r.product_name,
+      sku: r.sku,
+      barcode: r.barcode,
+      brand: r.brand,
+      category: r.category,
+      imageUrl: r.primary_image_url || '',
+      sellingPrice: parseFloat(r.selling_price || '0'),
+      costPrice: parseFloat(r.cost_price || '0'),
+      totalStock: parseInt(r.total_stock || '0', 10),
+      unitsSold: parseInt(r.units_sold || '0', 10),
+      totalRevenue: parseFloat(r.total_revenue || '0'),
+      orderCount: parseInt(r.order_count || '0', 10),
+    }));
+
+    const topCategories = topCategoriesRes.rows.map((r) => ({
+      name: r.name,
+      skuCount: parseInt(r.sku_count || '0', 10),
+      totalStock: parseInt(r.total_stock || '0', 10),
+      unitsSold: parseInt(r.units_sold || '0', 10),
+      totalRevenue: parseFloat(r.total_revenue || '0'),
+    }));
+
+    const topBrands = topBrandsRes.rows.map((r) => ({
+      name: r.name,
+      skuCount: parseInt(r.sku_count || '0', 10),
+      totalStock: parseInt(r.total_stock || '0', 10),
+      unitsSold: parseInt(r.units_sold || '0', 10),
+      totalRevenue: parseFloat(r.total_revenue || '0'),
+    }));
+
+    const sevenDaySales = sevenDaysRes.rows.map((r, idx) => ({
+      date: r.date || '',
+      label: r.label || `Day ${idx + 1}`,
+      amount: parseFloat(r.amount || '0'),
+      txCount: parseInt(r.tx_count || '0', 10),
+    }));
+
+    const recentTransactions = recentTxRes.rows.map((r) => {
+      const dt = r.created_at ? new Date(r.created_at) : new Date();
+      return {
+        type: r.type || 'Sale',
+        reference: r.reference || '',
+        storeName: r.store_name || '',
+        storeSlug: r.store_slug || '',
+        customerName: r.customer_name || 'Walk-in Customer',
+        amount: parseFloat(r.amount || '0'),
+        currency: r.currency || 'Rs.',
+        status: r.status || 'Completed',
+        date: dt.toISOString(),
+        timeString: dt.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      };
+    });
 
     return res.json({
       metrics: {
@@ -342,6 +649,13 @@ router.get('/superadmin/overview', requireAuth, requireSuperAdmin, async (_req: 
       },
       stores,
       storeRequests: requestsRes.rows,
+      reports: {
+        topSkus,
+        topCategories,
+        topBrands,
+        sevenDaySales,
+        recentTransactions,
+      },
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to load SuperAdmin overview: ' + err.message });
@@ -424,7 +738,6 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
     const tenantId = parseInt(req.params.id, 10);
     const {
       storeName,
-      ownerName,
       ownerEmail,
       ownerPhone,
       subscriptionPlan,
@@ -436,16 +749,31 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
       renewFromNow,
     } = req.body || {};
 
-    const existingRes = await pgClient.query<any>('SELECT * FROM tenants WHERE id = $1 LIMIT 1', [tenantId]);
+    const existingRes = await pgClient.query<any>(
+      `SELECT t.*,
+              u.id AS admin_user_id,
+              u.email AS owner_email,
+              u.phone AS owner_phone
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT id, email, phone
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
+       WHERE t.id = $1
+       LIMIT 1`,
+      [tenantId]
+    );
     if (existingRes.rows.length === 0) {
       return res.status(404).json({ error: 'Store tenant not found.' });
     }
     const curr = existingRes.rows[0];
 
     const finalStoreName = storeName && String(storeName).trim() ? String(storeName).trim() : curr.name;
-    const finalOwnerName = ownerName !== undefined ? String(ownerName).trim() : curr.owner_name;
-    const finalOwnerEmail = ownerEmail !== undefined ? String(ownerEmail).trim().toLowerCase() : curr.owner_email;
-    const finalOwnerPhone = ownerPhone !== undefined ? String(ownerPhone).trim() : curr.owner_phone;
+    const finalOwnerEmail = ownerEmail !== undefined ? String(ownerEmail).trim().toLowerCase() : (curr.owner_email || '');
+    const finalOwnerPhone = ownerPhone !== undefined ? String(ownerPhone).trim() : (curr.owner_phone || '');
 
     const finalPlan = subscriptionPlan
       ? normalizeSubscriptionPlan(subscriptionPlan)
@@ -517,23 +845,17 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
     const updatedRes = await pgClient.query(
       `UPDATE tenants
        SET name = $1,
-           owner_name = $2,
-           owner_email = $3,
-           owner_phone = $4,
-           app_key = $5,
-           subscription_plan = $6,
-           subscription_start_date = $7,
-           subscription_end_date = $8,
-           subscription_status = $9,
-           status = $10,
+           app_key = $2,
+           subscription_plan = $3,
+           subscription_start_date = $4,
+           subscription_end_date = $5,
+           subscription_status = $6,
+           status = $7,
            updated_at = NOW()
-       WHERE id = $11
+       WHERE id = $8
        RETURNING *`,
       [
         finalStoreName,
-        finalOwnerName,
-        finalOwnerEmail,
-        finalOwnerPhone,
         finalAppKey,
         finalPlan,
         finalStartDate.toISOString(),
@@ -544,13 +866,19 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
       ]
     );
 
-    // Sync store name with company_settings
-    await pgClient
-      .query(
-        `UPDATE company_settings SET name = $1, updated_at = NOW() WHERE tenant_id = $2`,
-        [finalStoreName, tenantId]
-      )
-      .catch(() => {});
+    // Sync store owner contact in users table
+    if (curr.admin_user_id) {
+      await pgClient
+        .query(
+          `UPDATE users
+           SET email = CASE WHEN $1 != '' THEN $1 ELSE email END,
+               phone = $2,
+               updated_at = NOW()
+           WHERE id = $3 AND tenant_id = $4`,
+          [finalOwnerEmail, finalOwnerPhone, curr.admin_user_id, tenantId]
+        )
+        .catch(() => {});
+    }
 
     const row = updatedRes.rows[0];
     return res.json({
@@ -565,9 +893,8 @@ async function handleUpdateTenantSubscription(req: AuthenticatedRequest, res: Re
         subscriptionStartDate: new Date(row.subscription_start_date).toISOString(),
         subscriptionEndDate: new Date(row.subscription_end_date).toISOString(),
         subscriptionStatus: row.subscription_status,
-        ownerName: row.owner_name,
-        ownerEmail: row.owner_email,
-        ownerPhone: row.owner_phone,
+        ownerEmail: finalOwnerEmail,
+        ownerPhone: finalOwnerPhone,
       },
       message: `Subscription & App Key updated for '${row.name}'.`,
     });
@@ -612,7 +939,6 @@ router.post('/superadmin/tenants/:id/regenerate-key', requireAuth, requireSuperA
 async function provisionNewTenantStore(params: {
   storeName: string;
   slug: string;
-  ownerName: string;
   ownerEmail: string;
   password?: string;
   ownerPhone?: string;
@@ -666,9 +992,8 @@ async function provisionNewTenantStore(params: {
   }>(
     `INSERT INTO tenants (
       slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status,
-      theme_color, background_color, logo_url,
-      owner_name, owner_email, owner_phone, address, tax_id, currency, plan, onboarding_completed, is_onboarded
-    ) VALUES ($1, $2, 'ACTIVE', $3, $4, $5, $6, $7, $8, '#0F172A', '/pwa-512x512.png', $9, $10, $11, '', '', $12, $4, false, false)
+      theme_color, background_color, onboarding_completed
+    ) VALUES ($1, $2, 'ACTIVE', $3, $4, $5, $6, $7, $8, '#0F172A', false)
     RETURNING id, slug, name, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status`,
     [
       cleanSlug,
@@ -679,10 +1004,6 @@ async function provisionNewTenantStore(params: {
       endDate.toISOString(),
       subscriptionStatus,
       themeColor,
-      params.ownerName.trim(),
-      params.ownerEmail.trim().toLowerCase(),
-      (params.ownerPhone || '').trim(),
-      currency,
     ]
   );
 
@@ -691,27 +1012,26 @@ async function provisionNewTenantStore(params: {
   // Create isolated company_settings row for the new tenant (marked is_installed = false until Owner completes Initial Store Setup)
   await pgClient.query(
     `INSERT INTO company_settings (
-      tenant_id, name, logo, address, phone, email, tax_id, tax_rate, currency, currency_symbol,
+      tenant_id, logo, address, phone, email, tax_id, tax_rate, currency, currency_symbol,
       invoice_prefix, purchase_prefix, barcode_prefix, invoice_footer, pricing_mode, is_installed
-    ) VALUES ($1, $2, '/pwa-512x512.png', '', $3, $4, '', 0, $5, 'Rs.', 'INV-', 'PUR-', '0108923', 'Thank you for shopping with us! Exchanges within 7 days with original receipt.', 'FIXED', false)`,
+    ) VALUES ($1, '/pwa-512x512.png', '', $2, $3, '', 0, $4, 'Rs.', 'INV-', 'PUR-', '0108923', 'Thank you for shopping with us! Exchanges within 7 days with original receipt.', 'FIXED', false)`,
     [
       newTenant.id,
-      params.storeName.trim(),
       (params.ownerPhone || '').trim(),
       params.ownerEmail.trim().toLowerCase(),
       currency,
     ]
   );
 
-  // Create initial Store Owner (ADMIN) and Store Cashier (CASHIER) users for this tenant
+  // Create initial Store Owner (ADMIN) user ONLY! Do NOT create cashier automatically!
   const storeUsers = await ensureTenantStoreUsers({
     tenantId: newTenant.id,
     slug: cleanSlug,
     storeName: params.storeName.trim(),
-    ownerName: params.ownerName.trim(),
     ownerEmail: params.ownerEmail.trim().toLowerCase(),
     ownerPhone: (params.ownerPhone || '').trim(),
     ownerPassword: params.password && params.password.trim() ? params.password.trim() : undefined,
+    createCashier: false,
   });
 
   return {
@@ -727,8 +1047,8 @@ async function provisionNewTenantStore(params: {
     adminUserId: storeUsers.owner.id,
     adminEmail: storeUsers.owner.email,
     initialPassword: storeUsers.owner.password,
-    cashierEmail: storeUsers.cashier.email,
-    cashierPassword: storeUsers.cashier.password,
+    cashierEmail: storeUsers.cashier ? storeUsers.cashier.email : null,
+    cashierPassword: storeUsers.cashier ? storeUsers.cashier.password : null,
     onboardingCompleted: false,
     onboardingUrl: `/app/${newTenant.slug}/install`,
     loginUrl: `/app/${newTenant.slug}/login`,
@@ -852,11 +1172,11 @@ router.get('/superadmin/export-sql', requireAuth, requireSuperAdmin, async (_req
   try {
     await ensureSaasControlPlane();
     const dateStamp = new Date().toISOString().slice(0, 10);
-    const filename = `mypos-all-stores-backup-${dateStamp}.sql`;
+    const filename = `pos-all-stores-backup-${dateStamp}.sql`;
 
     const sections: string[] = [
       `-- ============================================================================`,
-      `-- MyPOS Multi-Tenant SaaS — Complete Platform SQL Backup (All Stores)`,
+      `-- Multi-Tenant POS SaaS — Complete Platform SQL Backup (All Stores)`,
       `-- Exported At: ${new Date().toISOString()}`,
       `-- ============================================================================`,
       `BEGIN;`,
@@ -1057,7 +1377,6 @@ router.post('/superadmin/store-requests/:id/approve', requireAuth, requireSuperA
       id: number;
       store_name: string;
       requested_slug: string;
-      owner_name: string;
       owner_email: string;
       owner_phone: string;
       plan: string;
@@ -1155,7 +1474,6 @@ router.post('/superadmin/store-requests/:id/approve', requireAuth, requireSuperA
     const provisioned = await provisionNewTenantStore({
       storeName: storeName && String(storeName).trim() ? String(storeName).trim() : storeReq.store_name,
       slug: slug && String(slug).trim() ? String(slug).trim() : storeReq.requested_slug,
-      ownerName: storeReq.owner_name,
       ownerEmail: storeReq.owner_email,
       ownerPhone: storeReq.owner_phone,
       password: password && String(password).trim() ? String(password).trim() : undefined,
@@ -1195,7 +1513,7 @@ router.post('/superadmin/store-requests/:id/reject', requireAuth, requireSuperAd
 router.patch('/superadmin/store-requests/:id', requireAuth, requireSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const requestId = parseInt(req.params.id, 10);
-    const { status, storeName, requestedSlug, ownerName, ownerEmail, ownerPhone, plan } = req.body || {};
+    const { status, storeName, requestedSlug, ownerEmail, ownerPhone, plan } = req.body || {};
 
     const existingRes = await pgClient.query<any>('SELECT * FROM store_requests WHERE id = $1', [requestId]);
     if (existingRes.rows.length === 0) {
@@ -1210,7 +1528,6 @@ router.patch('/superadmin/store-requests/:id', requireAuth, requireSuperAdmin, a
     const nextSlug = requestedSlug !== undefined
       ? String(requestedSlug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
       : curr.requested_slug;
-    const nextOwnerName = ownerName !== undefined ? String(ownerName).trim() : curr.owner_name;
     const nextOwnerEmail = ownerEmail !== undefined ? String(ownerEmail).trim().toLowerCase() : curr.owner_email;
     const nextOwnerPhone = ownerPhone !== undefined ? String(ownerPhone).trim() : curr.owner_phone;
     const nextPlan = plan !== undefined ? String(plan).trim() : curr.plan;
@@ -1220,13 +1537,12 @@ router.patch('/superadmin/store-requests/:id', requireAuth, requireSuperAdmin, a
        SET status = $1,
            store_name = $2,
            requested_slug = $3,
-           owner_name = $4,
-           owner_email = $5,
-           owner_phone = $6,
-           plan = $7
-       WHERE id = $8
+           owner_email = $4,
+           owner_phone = $5,
+           plan = $6
+       WHERE id = $7
        RETURNING *`,
-      [nextStatus, nextStoreName, nextSlug, nextOwnerName, nextOwnerEmail, nextOwnerPhone, nextPlan, requestId]
+      [nextStatus, nextStoreName, nextSlug, nextOwnerEmail, nextOwnerPhone, nextPlan, requestId]
     );
 
     return res.json({
@@ -1293,14 +1609,13 @@ router.post('/superadmin/store-requests/:id/delete', requireAuth, requireSuperAd
 
 /**
  * 8. SUPERADMIN DIRECT STORE CREATION (`POST /api/superadmin/tenants`)
- * Minimal Required Fields Only: Store Name, Owner Name, Owner Email, Password, Subdomain Slug
+ * Minimal Required Fields Only: Store Name, Owner Email, Password, Subdomain Slug
  */
 router.post('/superadmin/tenants', requireAuth, requireSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
       storeName,
       slug,
-      ownerName,
       ownerEmail,
       password,
       ownerPhone,
@@ -1311,8 +1626,8 @@ router.post('/superadmin/tenants', requireAuth, requireSuperAdmin, async (req: A
       subscriptionStartDate,
       subscriptionEndDate,
     } = req.body || {};
-    if (!storeName || !slug || !ownerName || !ownerEmail) {
-      return res.status(400).json({ error: 'Store name, subdomain slug, owner name, and owner email are required.' });
+    if (!storeName || !slug || !ownerEmail) {
+      return res.status(400).json({ error: 'Store name, subdomain slug, and owner email are required.' });
     }
     if (password !== undefined && String(password).trim().length > 0 && String(password).trim().length < 4) {
       return res.status(400).json({ error: 'Owner password must be at least 4 characters.' });
@@ -1322,7 +1637,6 @@ router.post('/superadmin/tenants', requireAuth, requireSuperAdmin, async (req: A
     const provisioned = await provisionNewTenantStore({
       storeName,
       slug,
-      ownerName,
       ownerEmail,
       password: password ? String(password).trim() : undefined,
       ownerPhone,
@@ -1360,9 +1674,19 @@ router.get('/tenants/:slug/onboarding', async (req: Request, res: Response) => {
     const slug = String(req.params.slug || '').trim().toLowerCase();
     const tenantRes = await pgClient.query(
       `SELECT t.*,
-              (SELECT email FROM users u WHERE u.tenant_id = t.id AND u.role = 'ADMIN' ORDER BY id ASC LIMIT 1) as admin_email,
-              (SELECT COUNT(*) FROM products p WHERE p.tenant_id = t.id)::int as product_count
+              u.name as admin_name,
+              u.email as admin_email,
+              u.phone as admin_phone,
+              (SELECT COUNT(*) FROM products p WHERE p.tenant_id = t.id)::int as product_count,
+              (SELECT COUNT(*) FROM users ca WHERE ca.tenant_id = t.id AND ca.role = 'CASHIER')::int as cashier_count
        FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT name, email, phone
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
        WHERE LOWER(t.slug) = $1
        LIMIT 1`,
       [slug]
@@ -1385,15 +1709,15 @@ router.get('/tenants/:slug/onboarding', async (req: Request, res: Response) => {
         slug: t.slug,
         name: t.name,
         status: t.status,
-        address: cs.address || t.address || '',
-        taxId: cs.tax_id || t.tax_id || '',
+        address: cs.address || '',
+        taxId: cs.tax_id || '',
         strn: cs.strn || '',
         taxRate: Number(cs.tax_rate) || 0,
-        currency: cs.currency || t.currency || 'PKR',
-        currencySymbol: cs.currency_symbol || t.currency_symbol || 'Rs.',
+        currency: cs.currency || 'PKR',
+        currencySymbol: cs.currency_symbol || 'Rs.',
         invoicePrefix: cs.invoice_prefix || 'INV-',
         purchasePrefix: cs.purchase_prefix || 'PUR-',
-        barcodePrefix: cs.barcode_prefix || '0108923',
+        barcodePrefix: cs.barcode_prefix || '',
         invoiceFooter:
           cs.invoice_footer ||
           'Thank you for shopping with us! Exchanges accepted within 7 days with original receipt.',
@@ -1401,12 +1725,13 @@ router.get('/tenants/:slug/onboarding', async (req: Request, res: Response) => {
         pricingMode: cs.pricing_mode || 'FIXED',
         themeColor: t.theme_color || '#7C3AED',
         backgroundColor: t.background_color || '#0F172A',
-        logoUrl: cs.logo || t.logo_url || '/pwa-512x512.png',
-        ownerName: t.owner_name || 'Store Owner',
-        ownerEmail: cs.email || t.admin_email || t.owner_email || '',
-        ownerPhone: cs.phone || t.owner_phone || '',
-        onboardingCompleted: Boolean(t.onboarding_completed || t.is_onboarded),
-        isLocked: Boolean(t.onboarding_completed || t.is_onboarded),
+        logoUrl: cs.logo || '/pwa-512x512.png',
+        ownerName: t.admin_name || '',
+        ownerEmail: cs.email || t.admin_email || '',
+        ownerPhone: cs.phone || t.admin_phone || '',
+        hasCashier: Boolean(t.cashier_count > 0),
+        onboardingCompleted: Boolean(t.onboarding_completed),
+        isLocked: Boolean(t.onboarding_completed),
         productCount: t.product_count || 0,
       },
     });
@@ -1425,12 +1750,21 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       slug: string;
       name: string;
       status: string;
-      owner_name: string;
       owner_email: string;
       onboarding_completed: boolean;
-      is_onboarded: boolean;
     }>(
-      `SELECT id, slug, name, status, owner_name, owner_email, onboarding_completed, is_onboarded FROM tenants WHERE LOWER(slug) = $1 LIMIT 1`,
+      `SELECT t.id, t.slug, t.name, t.status, t.onboarding_completed,
+              u.email AS owner_email
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT email
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
+       WHERE LOWER(t.slug) = $1
+       LIMIT 1`,
       [slug]
     );
 
@@ -1441,7 +1775,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     const tenant = tenantRes.rows[0];
 
     // Lock Initial Store Setup & POS Defaults once store owner has completed setup
-    if (tenant.onboarding_completed || tenant.is_onboarded) {
+    if (tenant.onboarding_completed) {
       return res.status(403).json({
         error:
           'Initial Store Setup & POS Defaults is locked because this store has already been configured by the Store Owner.',
@@ -1459,6 +1793,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       currencySymbol,
       phone,
       email,
+      ownerName,
       invoicePrefix,
       purchasePrefix,
       barcodePrefix,
@@ -1469,6 +1804,12 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       backgroundColor,
       logoUrl,
       adminPassword,
+      // Cashier fields (optional! If skipped, no cashier account is created):
+      createCashier,
+      cashierName,
+      cashierEmail,
+      cashierPassword,
+      cashierPhone,
       initialProducts,
     } = req.body || {};
 
@@ -1496,8 +1837,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     ).trim();
     const finalInvoicePrefix = String(invoicePrefix || 'INV-').trim() || 'INV-';
     const finalPurchasePrefix = String(purchasePrefix || 'PUR-').trim() || 'PUR-';
-    const rawDigitsBarcode = String(barcodePrefix || '0108923').replace(/\D/g, '');
-    const finalBarcodePrefix = rawDigitsBarcode.length === 7 ? rawDigitsBarcode : '0108923';
+    const finalBarcodePrefix = String(barcodePrefix || '').trim();
     const finalInvoiceFooter =
       String(
         invoiceFooter ||
@@ -1515,32 +1855,16 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     await pgClient.query(
       `UPDATE tenants
        SET name = $1,
-           address = $2,
-           business_address = $2,
-           tax_id = $3,
-           currency = $4,
-           currency_symbol = $5,
-           theme_color = $6,
-           background_color = $7,
-           logo_url = $8,
-           owner_phone = COALESCE(NULLIF($9, ''), owner_phone),
-           owner_email = COALESCE(NULLIF($10, ''), owner_email),
+           theme_color = $2,
+           background_color = $3,
            status = 'ACTIVE',
            onboarding_completed = true,
-           is_onboarded = true,
            updated_at = NOW()
-       WHERE id = $11`,
+       WHERE id = $4`,
       [
         finalName,
-        finalAddress,
-        finalTaxId,
-        finalCurrency,
-        finalCurrencySymbol,
         finalThemeColor,
         finalBgColor,
-        finalLogoUrl,
-        finalPhone,
-        finalEmail,
         tenant.id,
       ]
     );
@@ -1550,28 +1874,26 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     if (settingsCheck.rows.length > 0) {
       await pgClient.query(
         `UPDATE company_settings
-         SET name = $1,
-             logo = $2,
-             address = $3,
-             tax_id = $4,
-             strn = $5,
-             tax_rate = $6,
-             currency = $7,
-             currency_symbol = $8,
-             phone = COALESCE(NULLIF($9, ''), phone),
-             email = COALESCE(NULLIF($10, ''), email),
-             invoice_prefix = $11,
-             purchase_prefix = $12,
-             barcode_prefix = $13,
-             invoice_footer = $14,
-             low_stock_limit = $15,
-             pricing_mode = $16,
+         SET logo = $1,
+             address = $2,
+             tax_id = $3,
+             strn = $4,
+             tax_rate = $5,
+             currency = $6,
+             currency_symbol = $7,
+             phone = COALESCE(NULLIF($8, ''), phone),
+             email = COALESCE(NULLIF($9, ''), email),
+             invoice_prefix = $10,
+             purchase_prefix = $11,
+             barcode_prefix = $12,
+             invoice_footer = $13,
+             low_stock_limit = $14,
+             pricing_mode = $15,
              pricing_policy_locked = true,
              is_installed = true,
              updated_at = NOW()
-         WHERE tenant_id = $17`,
+         WHERE tenant_id = $16`,
         [
-          finalName,
           finalLogoUrl,
           finalAddress,
           finalTaxId,
@@ -1593,13 +1915,12 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
     } else {
       await pgClient.query(
         `INSERT INTO company_settings (
-           tenant_id, name, logo, address, tax_id, strn, tax_rate, currency, currency_symbol,
+           tenant_id, logo, address, tax_id, strn, tax_rate, currency, currency_symbol,
            phone, email, invoice_prefix, purchase_prefix, barcode_prefix, invoice_footer,
            low_stock_limit, pricing_mode, pricing_policy_locked, is_installed
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true, true)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, true)`,
         [
           tenant.id,
-          finalName,
           finalLogoUrl,
           finalAddress,
           finalTaxId,
@@ -1619,14 +1940,19 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       );
     }
 
-    // Ensure Owner & Cashier accounts exist
+    // Ensure Store Owner (ADMIN) exists, and only create Cashier if user explicitly requested it!
     const ensuredUsers = await ensureTenantStoreUsers({
       tenantId: tenant.id,
       slug: tenant.slug,
       storeName: finalName,
-      ownerName: tenant.owner_name,
+      ownerName: ownerName && String(ownerName).trim() ? String(ownerName).trim() : undefined,
       ownerEmail: finalEmail || tenant.owner_email,
       ownerPhone: finalPhone,
+      createCashier: Boolean(createCashier),
+      cashierName: cashierName && String(cashierName).trim() ? String(cashierName).trim() : undefined,
+      cashierEmail: cashierEmail && String(cashierEmail).trim() ? String(cashierEmail).trim().toLowerCase() : undefined,
+      cashierPassword: cashierPassword && String(cashierPassword).trim() ? String(cashierPassword).trim() : undefined,
+      cashierPhone: cashierPhone && String(cashierPhone).trim() ? String(cashierPhone).trim() : undefined,
     });
     const adminUser: any = ensuredUsers.owner;
 
@@ -1636,6 +1962,35 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
       await pgClient.query(
         `UPDATE users SET password_hash = $1, quick_password = $2, status = 'APPROVED', active = true WHERE id = $3 AND tenant_id = $4`,
         [hash, cleanPass, adminUser.id, tenant.id]
+      );
+    }
+    if (ownerName && String(ownerName).trim()) {
+      await pgClient.query(
+        `UPDATE users SET name = $1 WHERE id = $2 AND tenant_id = $3`,
+        [String(ownerName).trim(), adminUser.id, tenant.id]
+      );
+      adminUser.name = String(ownerName).trim();
+    }
+    if (finalEmail) {
+      await pgClient.query(
+        `UPDATE users SET email = $1 WHERE id = $2 AND tenant_id = $3`,
+        [finalEmail, adminUser.id, tenant.id]
+      );
+      adminUser.email = finalEmail;
+    }
+    if (finalPhone) {
+      await pgClient.query(
+        `UPDATE users SET phone = $1 WHERE id = $2 AND tenant_id = $3`,
+        [finalPhone, adminUser.id, tenant.id]
+      );
+      adminUser.phone = finalPhone;
+    }
+
+    // If user skipped cashier creation during onboarding wizard, ensure no cashier account was automatically created!
+    if (!createCashier) {
+      await pgClient.query(
+        `DELETE FROM users WHERE tenant_id = $1 AND role = 'CASHIER'`,
+        [tenant.id]
       );
     }
 
@@ -1657,7 +2012,7 @@ router.post('/tenants/:slug/onboarding', async (req: Request, res: Response) => 
         const pBarcode =
           item.barcode && String(item.barcode).trim()
             ? String(item.barcode).trim()
-            : `${finalBarcodePrefix.slice(0, 2)}${String(tenant.id).padStart(2, '0')}${String(i + 1).padStart(3, '0')}`;
+            : `${pCategory.slice(0, 2).toUpperCase() || 'CA'}-${i + 1}`;
 
         await pgClient.query(
           `INSERT INTO products (

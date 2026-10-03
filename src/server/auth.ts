@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { pgClient } from '../db/index.ts';
 import { ensureSaasControlPlane } from '../db/schemaInit.ts';
+import { extractRequestStoreSubdomain } from './middleware/tenantMiddleware.ts';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'shoe-pos-super-secure-jwt-secret-key-2026';
 
@@ -9,6 +10,7 @@ export interface AuthUser {
   id: number;
   tenantId: number;
   slug: string;
+  storeSubdomain?: string;
   name: string;
   email: string;
   phone?: string;
@@ -32,7 +34,7 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Generates a signed JWT containing `tenantId`, `role`, and `slug` in the payload.
+ * Generates a signed JWT containing `tenantId`, `role`, `slug`, and `storeSubdomain` in the payload.
  */
 export function generateToken(user: {
   id: number;
@@ -52,6 +54,7 @@ export function generateToken(user: {
       id: user.id,
       tenantId,
       slug,
+      storeSubdomain: slug,
       name: user.name,
       email: user.email,
       role,
@@ -66,6 +69,7 @@ export function generateToken(user: {
  * Strict Server-Side JWT Authentication & Tenant Isolation Middleware:
  * - Never trusts `tenant_id` in request bodies or query parameters.
  * - Extracts `tenantId`, `role`, and `slug` strictly from the decrypted JWT payload.
+ * - Cross-verifies the request's store subdomain (Origin / Referer / Host / Route) against the JWT's store slug to prevent cross-store spoofing.
  * - Immediately blocks access if the tenant has been suspended by SuperAdmin.
  */
 export function extractTokenFromRequest(req: Request): string | null {
@@ -97,6 +101,15 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     delete (req.query as any).tenantId;
   }
 
+  // Verify request origin subdomain vs claimed store slug to block cross-origin spoofing
+  const subCheck = extractRequestStoreSubdomain(req);
+  if (subCheck.isSpoofed) {
+    return res.status(403).json({
+      error: `Cross-origin store spoofing blocked: Request origin store "${subCheck.originSubdomain}" does not match target store "${subCheck.claimedSlug}".`,
+      code: 'STORE_SPOOFING_BLOCKED',
+    });
+  }
+
   const token = extractTokenFromRequest(req);
   if (!token) {
     return res.status(401).json({ error: 'Authentication required. Please login.' });
@@ -112,13 +125,17 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
   try {
     await ensureSaasControlPlane();
 
+    const expectedJwtTenantId = Number(decoded.tenantId) > 0 ? Number(decoded.tenantId) : 1;
     const userRes = await pgClient.query<any>(
-      'SELECT id, tenant_id, name, email, phone, avatar_url, role, status FROM users WHERE id = $1',
-      [decoded.id]
+      `SELECT id, tenant_id, name, email, phone, avatar_url, role, status
+       FROM users
+       WHERE id = $1 AND (UPPER(role) = 'SUPERADMIN' OR COALESCE(tenant_id, 1) = $2)
+       LIMIT 1`,
+      [decoded.id, expectedJwtTenantId]
     );
 
     if (userRes.rows.length === 0) {
-      return res.status(401).json({ error: 'User account no longer exists. Please login again.' });
+      return res.status(401).json({ error: 'User account no longer exists in this store. Please login again.' });
     }
 
     const row = userRes.rows[0];
@@ -126,19 +143,37 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       return res.status(423).json({ error: 'Your account is pending Admin approval.' });
     }
 
-    // Strict tenantId resolution from decrypted JWT & verified user row
+    // Strict tenantId resolution from verified user row, active store resolution, and decrypted JWT
     const jwtTid = Number(decoded.tenantId);
     const rowTid = Number(row.tenant_id);
-    const resolvedTenantId =
-      Number.isInteger(jwtTid) && jwtTid > 0
-        ? jwtTid
-        : Number.isInteger(rowTid) && rowTid > 0
-        ? rowTid
-        : 1;
-    let resolvedSlug = String(decoded.slug || '').toLowerCase();
+    const activeRouteTid = Number((req as any).tenantResolution?.tenant?.id);
     const resolvedRole = String(row.role || decoded.role || 'CASHIER').toUpperCase() as 'SUPERADMIN' | 'ADMIN' | 'CASHIER';
 
-    // Real-time Tenant Suspension & Subscription Expiry Enforcement at Middleware Level (except for global SUPERADMIN)
+    // For Store Owner (ADMIN) and Cashier (CASHIER), enforce that DB row tenant_id matches JWT tenantId
+    if (resolvedRole !== 'SUPERADMIN' && Number.isInteger(rowTid) && Number.isInteger(jwtTid) && rowTid !== jwtTid) {
+      return res.status(401).json({
+        error: 'Session tenant mismatch detected. Please sign in to this store again.',
+        code: 'TENANT_TOKEN_MISMATCH',
+      });
+    }
+
+    let resolvedTenantId =
+      Number.isInteger(rowTid) && rowTid > 0
+        ? rowTid
+        : Number.isInteger(jwtTid) && jwtTid > 0
+        ? jwtTid
+        : 1;
+
+    // If SUPERADMIN is operating inside a specific store route (/app/:slug or X-Tenant-Slug), scope to that store's tenant_id
+    if (resolvedRole === 'SUPERADMIN' && Number.isInteger(activeRouteTid) && activeRouteTid > 0) {
+      resolvedTenantId = activeRouteTid;
+    }
+
+    let resolvedSlug =
+      (req as any).tenantResolution?.tenant?.slug ||
+      String(decoded.storeSubdomain || decoded.slug || '').toLowerCase();
+
+    // Real-time Tenant Subdomain Binding, Suspension & Subscription Expiry Enforcement (except for global SUPERADMIN)
     if (resolvedRole !== 'SUPERADMIN') {
       try {
         const tenantCheck = await pgClient.query<{
@@ -155,6 +190,38 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
         if (tenantCheck.rows.length > 0) {
           const tRow = tenantCheck.rows[0];
           resolvedSlug = tRow.slug || resolvedSlug;
+
+          // Verify that the token's store slug matches the active request's store subdomain/slug (prevents using Store 1 token on Store 2)
+          const requestStoreSlug =
+            subCheck.effectiveSlug ||
+            ((req as any).tenantResolution?.tenant?.slug
+              ? String((req as any).tenantResolution.tenant.slug).toLowerCase()
+              : null);
+
+          if (
+            requestStoreSlug &&
+            tRow.slug &&
+            tRow.slug.toLowerCase() !== requestStoreSlug.toLowerCase()
+          ) {
+            return res.status(401).json({
+              error: `Cross-store session rejected: Your session belongs to store "${tRow.slug}", not "${requestStoreSlug}". Please sign in via this store's login.`,
+              code: 'CROSS_STORE_TOKEN_REJECTED',
+              expectedSlug: requestStoreSlug,
+              tokenSlug: tRow.slug,
+            });
+          }
+
+          if (
+            Number.isInteger(activeRouteTid) &&
+            activeRouteTid > 0 &&
+            tRow.id !== activeRouteTid
+          ) {
+            return res.status(401).json({
+              error: `Cross-store session rejected: Your credentials belong to store "${tRow.slug}". Please sign in to the active store.`,
+              code: 'CROSS_STORE_TOKEN_REJECTED',
+            });
+          }
+
           const isExpiredByDate =
             tRow.subscription_end_date && new Date(tRow.subscription_end_date).getTime() < Date.now();
           const isMarkedExpired =
@@ -204,6 +271,7 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       id: row.id,
       tenantId: resolvedTenantId,
       slug: resolvedSlug,
+      storeSubdomain: resolvedSlug,
       name: row.name,
       email: row.email,
       phone: row.phone || '',

@@ -382,7 +382,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isFetchingNotifsRef = useRef(false);
 
   const fetchLiveNotifications = async () => {
-    if (isFetchingNotifsRef.current) return;
+    if (isFetchingNotifsRef.current || !currentUser) return;
     isFetchingNotifsRef.current = true;
     try {
       setIsLoadingNotifs(true);
@@ -390,8 +390,8 @@ export const Header: React.FC<HeaderProps> = ({
       if (res && Array.isArray(res.notifications)) {
         setNotifications(res.notifications);
       }
-    } catch (err) {
-      console.warn('Could not fetch real-time notifications:', err);
+    } catch {
+      // Ignore transient polling errors during server restarts
     } finally {
       isFetchingNotifsRef.current = false;
       setIsLoadingNotifs(false);

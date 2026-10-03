@@ -29,6 +29,7 @@ import { formatStockPrice, getProductRetailPrice, getProductMinFloorPrice } from
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { BrandLogo } from '../common/BrandLogo.tsx';
 import { StatCard, triggerStatRecount } from '../common/StatCard.tsx';
+import { STANDARD_FOOTWEAR_CATEGORIES } from '../../utils/sku.ts';
 
 interface ProductManagementProps {
   currentUser: any;
@@ -52,7 +53,7 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({
 
   const [products, setProducts] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>(STANDARD_FOOTWEAR_CATEGORIES);
 
   const [searchTerm, setSearchTerm] = useState('');
   const initialBrandStr = initialBrand || (typeof initialBrandId === 'string' ? initialBrandId : '') || '';
@@ -154,10 +155,30 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({
         api.brandCategory.getBrands(),
         api.brandCategory.getCategories(),
       ]);
-      setBrands(bRes.brands || []);
-      setCategories(cRes.categories || []);
-    } catch (e) {
-      console.error('Failed to load filter metadata:', e);
+
+      const seenB = new Set<string>();
+      const uniqueB: any[] = [];
+      for (const b of (bRes.brands || [])) {
+        const name = (typeof b === 'string' ? b : b.name || '').trim();
+        if (name && !seenB.has(name.toLowerCase())) {
+          seenB.add(name.toLowerCase());
+          uniqueB.push(typeof b === 'string' ? { id: name, name } : b);
+        }
+      }
+      setBrands(uniqueB);
+
+      const seenC = new Set<string>();
+      const uniqueC: any[] = [];
+      for (const c of (cRes.categories || [])) {
+        const name = (typeof c === 'string' ? c : c.name || '').trim();
+        if (name && !seenC.has(name.toLowerCase())) {
+          seenC.add(name.toLowerCase());
+          uniqueC.push(typeof c === 'string' ? { id: name, name } : c);
+        }
+      }
+      setCategories(uniqueC);
+    } catch (e: any) {
+      console.warn('Notice loading filter metadata:', e?.message || e);
     }
   };
 
@@ -175,8 +196,8 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({
         lowStockOnly: lowStockFilter || undefined,
       });
       setProducts(res.products || []);
-    } catch (err) {
-      console.error('Failed to load products:', err);
+    } catch (err: any) {
+      console.warn('Notice loading products:', err?.message || err);
     } finally {
       isRefreshingRef.current = false;
       setIsLoading(false);
@@ -411,11 +432,12 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({
           className="capitalize px-3.5 py-2.5 bg-slate-50 dark:bg-purple-500/20 border border-slate-200 dark:border-purple-400/40 text-slate-800 dark:text-purple-200 hover:bg-slate-100 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] rounded-xl outline-none font-medium focus:border-blue-500 dark:focus:border-purple-400 cursor-pointer transition"
         >
           <option value="">All Brands</option>
-          {brands.map((b) => {
+          {brands.map((b, idx) => {
             const bName = typeof b === 'string' ? b : b.name;
             const isLocal = bName?.trim().toLowerCase() === 'local';
+            const optKey = b?.id ? `brand-opt-${b.id}` : `brand-opt-${bName || 'b'}-${idx}`;
             return (
-              <option key={bName} value={bName} className="dark:bg-[#120726] dark:text-purple-100">
+              <option key={optKey} value={bName} className="dark:bg-[#120726] dark:text-purple-100">
                 {bName} {isLocal ? '(Default)' : ''}
               </option>
             );
@@ -428,10 +450,11 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({
           className="capitalize px-3.5 py-2.5 bg-slate-50 dark:bg-purple-500/20 border border-slate-200 dark:border-purple-400/40 text-slate-800 dark:text-purple-200 hover:bg-slate-100 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] rounded-xl outline-none font-medium focus:border-blue-500 dark:focus:border-purple-400 cursor-pointer transition"
         >
           <option value="">All Categories</option>
-          {categories.map((c) => {
+          {categories.map((c, idx) => {
             const cName = typeof c === 'string' ? c : c.name;
+            const optKey = c?.id ? `cat-opt-${c.id}` : `cat-opt-${cName || 'c'}-${idx}`;
             return (
-              <option key={cName} value={cName} className="dark:bg-[#120726] dark:text-purple-100">
+              <option key={optKey} value={cName} className="dark:bg-[#120726] dark:text-purple-100">
                 {cName}
               </option>
             );

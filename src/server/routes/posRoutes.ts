@@ -52,6 +52,56 @@ async function generateReturnNumber(tenantId: number): Promise<string> {
   return `RET-${padded}`;
 }
 
+// POST /api/pos/verify-override - Verify Store Admin credentials strictly scoped by tenant_id
+router.post('/verify-override', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = extractStrictTenantId(req);
+    const { email, password, pin } = req.body || {};
+    const secret = String(password || pin || '').trim();
+    if (!secret) {
+      return res.status(400).json({ error: 'Admin password or PIN is required.' });
+    }
+
+    const adminQuery = email
+      ? await pgClient.query<any>(
+          `SELECT id, tenant_id, name, email, password_hash, role, status
+           FROM users
+           WHERE COALESCE(tenant_id, 1) = $2
+             AND LOWER(email) = LOWER($1)
+             AND role = 'ADMIN'
+             AND status = 'APPROVED'`,
+          [String(email).trim(), tenantId]
+        )
+      : await pgClient.query<any>(
+          `SELECT id, tenant_id, name, email, password_hash, role, status
+           FROM users
+           WHERE COALESCE(tenant_id, 1) = $1
+             AND role = 'ADMIN'
+             AND status = 'APPROVED'`,
+          [tenantId]
+        );
+
+    for (const adminRow of adminQuery.rows) {
+      if (Number(adminRow.tenant_id || 1) !== tenantId) continue;
+      if (await bcrypt.compare(secret, adminRow.password_hash)) {
+        return res.json({
+          verified: true,
+          adminId: adminRow.id,
+          tenantId,
+          adminName: adminRow.name,
+        });
+      }
+    }
+
+    return res.status(403).json({
+      verified: false,
+      error: 'Invalid Store Admin credentials for this store.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to verify override credentials: ' + err.message });
+  }
+});
+
 // POST /api/pos/checkout - Atomic Sale & Direct Shoe Exchange Processing (Strictly Scoped to req.user.tenantId)
 router.post('/checkout', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = extractStrictTenantId(req);

@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { pgClient } from './index.ts';
 
 let saasControlPlaneInitialized = false;
+let saasControlPlanePromise: Promise<void> | null = null;
+let databaseSchemaPromise: Promise<void> | null = null;
 
 /**
  * Generates an alphanumeric App Key in the format APP-KEY-XXXX-XXXX
@@ -85,7 +87,12 @@ export async function syncExpiredTenantSubscriptions(): Promise<void> {
  * Idempotent and safe for both PGlite and standard PostgreSQL.
  */
 export async function ensureDatabaseSchema(): Promise<void> {
-  await pgClient.waitReady;
+  if (saasControlPlaneInitialized) return;
+  if (databaseSchemaPromise) return databaseSchemaPromise;
+
+  databaseSchemaPromise = (async () => {
+    try {
+      await pgClient.waitReady;
 
   // Migrate any legacy TEXT/VARCHAR tenants.id or tenant_id columns to INTEGER before DDL
   await pgClient.exec(`
@@ -173,17 +180,6 @@ export async function ensureDatabaseSchema(): Promise<void> {
       subscription_status TEXT NOT NULL DEFAULT 'ACTIVE',
       theme_color TEXT NOT NULL DEFAULT '#2563EB',
       background_color TEXT NOT NULL DEFAULT '#ffffff',
-      logo_url TEXT DEFAULT '',
-      owner_name TEXT DEFAULT '',
-      owner_email TEXT DEFAULT '',
-      owner_phone TEXT DEFAULT '',
-      business_address TEXT DEFAULT '',
-      address TEXT DEFAULT '',
-      tax_id TEXT DEFAULT '',
-      currency TEXT NOT NULL DEFAULT 'PKR',
-      currency_symbol TEXT NOT NULL DEFAULT 'Rs.',
-      plan TEXT NOT NULL DEFAULT 'PRO',
-      is_onboarded BOOLEAN NOT NULL DEFAULT false,
       onboarding_completed BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -194,19 +190,9 @@ export async function ensureDatabaseSchema(): Promise<void> {
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS subscription_start_date TIMESTAMP NOT NULL DEFAULT NOW();
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS subscription_end_date TIMESTAMP NOT NULL DEFAULT (NOW() + INTERVAL '1 year');
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'ACTIVE';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS theme_color TEXT NOT NULL DEFAULT '#2563EB';
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS background_color TEXT NOT NULL DEFAULT '#ffffff';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_name TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_email TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_phone TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS address TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_address TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tax_id TEXT DEFAULT '';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'PKR';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS currency_symbol TEXT NOT NULL DEFAULT 'Rs.';
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'PRO';
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT false;
-    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_onboarded BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS tenants_slug_idx ON tenants(slug);
     CREATE INDEX IF NOT EXISTS tenants_status_idx ON tenants(status);
     CREATE UNIQUE INDEX IF NOT EXISTS tenants_app_key_idx ON tenants(app_key);
@@ -216,7 +202,6 @@ export async function ensureDatabaseSchema(): Promise<void> {
       id SERIAL PRIMARY KEY,
       store_name TEXT NOT NULL,
       requested_slug TEXT NOT NULL,
-      owner_name TEXT NOT NULL,
       owner_email TEXT NOT NULL,
       owner_phone TEXT DEFAULT '',
       business_address TEXT DEFAULT '',
@@ -233,6 +218,7 @@ export async function ensureDatabaseSchema(): Promise<void> {
     ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS request_type TEXT NOT NULL DEFAULT 'NEW_STORE';
     ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
     ALTER TABLE store_requests ADD COLUMN IF NOT EXISTS provisioned_tenant_id INTEGER;
+    ALTER TABLE store_requests DROP COLUMN IF EXISTS owner_name;
 
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -270,7 +256,6 @@ export async function ensureDatabaseSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS company_settings (
       id SERIAL PRIMARY KEY,
       tenant_id INTEGER NOT NULL DEFAULT 1,
-      name TEXT NOT NULL DEFAULT 'Your Shoe Store',
       logo TEXT DEFAULT '',
       address TEXT DEFAULT '',
       phone TEXT DEFAULT '',
@@ -278,19 +263,20 @@ export async function ensureDatabaseSchema(): Promise<void> {
       website TEXT DEFAULT '',
       strn TEXT DEFAULT '',
       tax_id TEXT DEFAULT '',
-      tax_number TEXT DEFAULT '',
+      tax_rate NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
       currency TEXT NOT NULL DEFAULT 'PKR',
       currency_name TEXT NOT NULL DEFAULT 'Pakistani Rupee',
       currency_symbol TEXT NOT NULL DEFAULT 'Rs.',
       invoice_prefix TEXT NOT NULL DEFAULT 'INV-',
       purchase_prefix TEXT NOT NULL DEFAULT 'PUR-',
-      barcode_prefix TEXT NOT NULL DEFAULT '0108923',
+      barcode_prefix TEXT NOT NULL DEFAULT '',
       invoice_footer TEXT NOT NULL DEFAULT 'Thank you for shopping with us!',
       show_receipt_logo BOOLEAN NOT NULL DEFAULT false,
       receipt_logo TEXT DEFAULT '',
       low_stock_limit INTEGER NOT NULL DEFAULT 5,
       pricing_mode TEXT NOT NULL DEFAULT 'FIXED',
       pricing_policy_locked BOOLEAN NOT NULL DEFAULT false,
+      deleted_product_ids INTEGER[] NOT NULL DEFAULT '{}',
       is_installed BOOLEAN DEFAULT false,
       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
@@ -305,21 +291,141 @@ export async function ensureDatabaseSchema(): Promise<void> {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pricing_policy_locked BOOLEAN DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS show_receipt_logo BOOLEAN DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS receipt_logo TEXT DEFAULT '';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS deleted_product_ids INTEGER[] NOT NULL DEFAULT '{}';
     CREATE INDEX IF NOT EXISTS company_settings_tenant_idx ON company_settings(tenant_id);
+
+    -- Consolidate & drop legacy duplicate columns between tenants, company_settings, and users
+    DO $$
+    BEGIN
+      -- 1. If company_settings had legacy name column, migrate non-default values into tenants.name and drop company_settings.name
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'company_settings' AND column_name = 'name'
+      ) THEN
+        EXECUTE 'UPDATE tenants t SET name = cs.name FROM company_settings cs WHERE cs.tenant_id = t.id AND cs.name IS NOT NULL AND TRIM(cs.name) != '''' AND cs.name != ''Your Shoe Store''';
+        EXECUTE 'ALTER TABLE company_settings DROP COLUMN IF EXISTS name';
+      END IF;
+
+      -- 2. If company_settings had legacy tax_number column, migrate non-empty values into tax_id and drop tax_number
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'company_settings' AND column_name = 'tax_number'
+      ) THEN
+        EXECUTE 'UPDATE company_settings SET tax_id = tax_number WHERE (tax_id IS NULL OR tax_id = '''') AND tax_number IS NOT NULL AND tax_number != ''''';
+        EXECUTE 'ALTER TABLE company_settings DROP COLUMN IF EXISTS tax_number';
+      END IF;
+
+      -- 2. If tenants had legacy is_onboarded column, sync into onboarding_completed before dropping
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'is_onboarded'
+      ) THEN
+        EXECUTE 'UPDATE tenants SET onboarding_completed = true WHERE is_onboarded = true';
+      END IF;
+
+      -- 3. Migrate any existing store profile fields from tenants into company_settings before dropping duplicate columns
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'logo_url'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET logo = t.logo_url FROM tenants t WHERE cs.tenant_id = t.id AND (cs.logo IS NULL OR cs.logo = '''') AND t.logo_url IS NOT NULL AND t.logo_url != ''''';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'address'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET address = t.address FROM tenants t WHERE cs.tenant_id = t.id AND (cs.address IS NULL OR cs.address = '''') AND t.address IS NOT NULL AND t.address != ''''';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'business_address'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET address = t.business_address FROM tenants t WHERE cs.tenant_id = t.id AND (cs.address IS NULL OR cs.address = '''') AND t.business_address IS NOT NULL AND t.business_address != ''''';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'tax_id'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET tax_id = t.tax_id FROM tenants t WHERE cs.tenant_id = t.id AND (cs.tax_id IS NULL OR cs.tax_id = '''') AND t.tax_id IS NOT NULL AND t.tax_id != ''''';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'currency'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET currency = t.currency FROM tenants t WHERE cs.tenant_id = t.id AND (cs.currency IS NULL OR cs.currency = '''') AND t.currency IS NOT NULL AND t.currency != ''''';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'currency_symbol'
+      ) THEN
+        EXECUTE 'UPDATE company_settings cs SET currency_symbol = t.currency_symbol FROM tenants t WHERE cs.tenant_id = t.id AND (cs.currency_symbol IS NULL OR cs.currency_symbol = '''') AND t.currency_symbol IS NOT NULL AND t.currency_symbol != ''''';
+      END IF;
+
+      -- 4. Drop duplicate owner & store profile columns from tenants (single source of truth: users for owner identity, company_settings for store profile)
+      ALTER TABLE tenants DROP COLUMN IF EXISTS owner_name;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS owner_email;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS owner_phone;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS business_address;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS address;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS tax_id;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS currency;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS currency_symbol;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS logo_url;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS plan;
+      ALTER TABLE tenants DROP COLUMN IF EXISTS is_onboarded;
+    END $$;
 
     UPDATE company_settings cs
     SET pricing_policy_locked = true,
         is_installed = true
     FROM tenants t
     WHERE cs.tenant_id = t.id
-      AND (t.onboarding_completed = true OR t.is_onboarded = true);
+      AND t.onboarding_completed = true;
+
+    CREATE TABLE IF NOT EXISTS brands (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
+      name TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE brands ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS brands_tenant_idx ON brands(tenant_id);
+
+    DELETE FROM brands a USING brands b
+    WHERE a.id > b.id
+      AND a.tenant_id = b.tenant_id
+      AND LOWER(TRIM(a.name)) = LOWER(TRIM(b.name));
+
+    CREATE UNIQUE INDEX IF NOT EXISTS brands_tenant_name_lower_idx ON brands(tenant_id, LOWER(TRIM(name)));
+
+    CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
+      name TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS categories_tenant_idx ON categories(tenant_id);
+
+    DELETE FROM categories a USING categories b
+    WHERE a.id > b.id
+      AND a.tenant_id = b.tenant_id
+      AND LOWER(TRIM(a.name)) = LOWER(TRIM(b.name));
+
+    CREATE UNIQUE INDEX IF NOT EXISTS categories_tenant_name_lower_idx ON categories(tenant_id, LOWER(TRIM(name)));
 
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
       tenant_id INTEGER NOT NULL DEFAULT 1,
+      tenant_product_no INTEGER,
       name TEXT NOT NULL,
       brand VARCHAR(100) NOT NULL DEFAULT 'Local',
-      category VARCHAR(100) NOT NULL DEFAULT 'Casual Shoes',
+      category VARCHAR(100) NOT NULL DEFAULT 'Men',
       sku TEXT NOT NULL,
       barcode TEXT NOT NULL,
       article TEXT DEFAULT '',
@@ -338,8 +444,9 @@ export async function ensureDatabaseSchema(): Promise<void> {
     );
 
     ALTER TABLE products ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS tenant_product_no INTEGER;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(100) DEFAULT 'Local';
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'Casual Shoes';
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'Men';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS article TEXT DEFAULT '';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS primary_image_url TEXT DEFAULT '';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(12, 2) DEFAULT 0.00;
@@ -349,10 +456,73 @@ export async function ensureDatabaseSchema(): Promise<void> {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS pricing_policy TEXT DEFAULT NULL;
     ALTER TABLE products DROP CONSTRAINT IF EXISTS products_sku_key;
     ALTER TABLE products DROP CONSTRAINT IF EXISTS products_barcode_key;
+    ALTER TABLE products DROP CONSTRAINT IF EXISTS products_article_key;
+    ALTER TABLE products DROP CONSTRAINT IF EXISTS products_sku_unique;
+    ALTER TABLE products DROP CONSTRAINT IF EXISTS products_barcode_unique;
+    ALTER TABLE products DROP CONSTRAINT IF EXISTS products_article_unique;
     DROP INDEX IF EXISTS products_barcode_idx;
     DROP INDEX IF EXISTS products_sku_idx;
+    DROP INDEX IF EXISTS products_article_idx;
+
+    -- Dynamically drop any remaining non-tenant UNIQUE constraint or UNIQUE index on products (sku, barcode, article must be unique per store tenant_id, NEVER globally)
+    DO $$
+    DECLARE
+      c RECORD;
+      idx RECORD;
+    BEGIN
+      FOR c IN
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'products'
+          AND con.contype = 'u'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM unnest(con.conkey) AS k(col_attnum)
+            JOIN pg_attribute attr ON attr.attrelid = rel.oid AND attr.attnum = k.col_attnum
+            WHERE attr.attname = 'tenant_id'
+          )
+      LOOP
+        EXECUTE format('ALTER TABLE public.products DROP CONSTRAINT IF EXISTS %I CASCADE', c.conname);
+      END LOOP;
+
+      FOR idx IN
+        SELECT i.relname AS index_name
+        FROM pg_index ix
+        JOIN pg_class t ON t.oid = ix.indrelid
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_namespace nsp ON nsp.oid = t.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND t.relname = 'products'
+          AND ix.indisunique = true
+          AND ix.indisprimary = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM unnest(ix.indkey) AS k(col_attnum)
+            JOIN pg_attribute attr ON attr.attrelid = t.oid AND attr.attnum = k.col_attnum
+            WHERE attr.attname = 'tenant_id'
+          )
+      LOOP
+        EXECUTE format('DROP INDEX IF EXISTS public.%I CASCADE', idx.index_name);
+      END LOOP;
+    END $$;
+
+    -- Backfill tenant_product_no per tenant (1..N) for any existing rows where it is NULL
+    WITH numbered AS (
+      SELECT id,
+             ROW_NUMBER() OVER (PARTITION BY COALESCE(tenant_id, 1) ORDER BY id ASC) AS rn
+      FROM products
+      WHERE tenant_product_no IS NULL
+    )
+    UPDATE products p
+    SET tenant_product_no = numbered.rn
+    FROM numbered
+    WHERE p.id = numbered.id;
 
     CREATE INDEX IF NOT EXISTS products_tenant_idx ON products(tenant_id);
+    CREATE INDEX IF NOT EXISTS products_tenant_product_no_idx ON products(tenant_id, tenant_product_no);
     CREATE INDEX IF NOT EXISTS products_brand_idx ON products(brand);
     CREATE INDEX IF NOT EXISTS products_category_idx ON products(category);
     CREATE INDEX IF NOT EXISTS products_barcode_idx ON products(barcode);
@@ -564,6 +734,12 @@ export async function ensureDatabaseSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(product_id);
     CREATE INDEX IF NOT EXISTS stock_movements_created_at_idx ON stock_movements(created_at);
   `);
+    } finally {
+      databaseSchemaPromise = null;
+    }
+  })();
+
+  return databaseSchemaPromise;
 }
 
 /**
@@ -582,13 +758,18 @@ export async function ensureTenantStoreUsers(params: {
   tenantId: number;
   slug: string;
   storeName?: string;
-  ownerName?: string;
   ownerEmail?: string;
+  ownerName?: string;
   ownerPhone?: string;
   ownerPassword?: string;
+  createCashier?: boolean;
+  cashierName?: string;
+  cashierEmail?: string;
+  cashierPhone?: string;
+  cashierPassword?: string;
 }): Promise<{
   owner: StoreQuickCredential;
-  cashier: StoreQuickCredential;
+  cashier: StoreQuickCredential | null;
 }> {
   const tenantId = Number(params.tenantId) || 1;
   const cleanSlug = (params.slug || 'store').trim().toLowerCase();
@@ -596,19 +777,9 @@ export async function ensureTenantStoreUsers(params: {
 
   // Determine canonical store-specific emails & default passwords
   const defaultOwnerEmail = (params.ownerEmail || `admin@${cleanSlug}.com`).trim().toLowerCase();
-
-  const defaultOwnerName =
-    (params.ownerName && params.ownerName.trim()) || `${storeLabel} (Owner)`;
-
+  const defaultOwnerName = (params.ownerName || `${storeLabel} Owner`).trim();
   const explicitPassword = params.ownerPassword && params.ownerPassword.trim() ? params.ownerPassword.trim() : '';
-
   const defaultOwnerPassword = explicitPassword || `${cleanSlug}@2026`;
-
-  const defaultCashierEmail = `cashier@${cleanSlug}.com`;
-
-  const defaultCashierName = `${storeLabel} Cashier`;
-
-  const defaultCashierPassword = `${cleanSlug}@cashier`;
 
   // 1. Resolve or create Store Owner (ADMIN)
   const adminRes = await pgClient.query<{
@@ -681,7 +852,7 @@ export async function ensureTenantStoreUsers(params: {
     };
   }
 
-  // 2. Resolve or create Store Cashier (CASHIER)
+  // 2. Resolve Store Cashier (CASHIER) - ONLY create if explicitly requested by user (never automatically!)
   const cashierRes = await pgClient.query<{
     id: number;
     name: string;
@@ -698,34 +869,19 @@ export async function ensureTenantStoreUsers(params: {
     [tenantId]
   );
 
-  let cashierCred: StoreQuickCredential;
+  let cashierCred: StoreQuickCredential | null = null;
   if (cashierRes.rows.length > 0) {
     const row = cashierRes.rows[0];
-    let verifiedPass = '';
-    if (row.quick_password && (await bcrypt.compare(row.quick_password, row.password_hash))) {
-      verifiedPass = row.quick_password;
-    } else {
+    let verifiedPass = row.quick_password || '';
+    if (!verifiedPass) {
       const candidates = Array.from(
-        new Set([defaultCashierPassword, 'cashier123', `${cleanSlug}@cashier`, `${cleanSlug}@2026`, '123456'])
+        new Set(['cashier123', `${cleanSlug}@cashier`, `${cleanSlug}@2026`, '123456'])
       );
       for (const cand of candidates) {
         if (await bcrypt.compare(cand, row.password_hash)) {
           verifiedPass = cand;
           break;
         }
-      }
-      if (!verifiedPass) {
-        verifiedPass = defaultCashierPassword;
-        const freshHash = await bcrypt.hash(verifiedPass, 10);
-        await pgClient.query(
-          `UPDATE users SET password_hash = $1, quick_password = $2, status = 'APPROVED', active = true WHERE id = $3`,
-          [freshHash, verifiedPass, row.id]
-        );
-      } else {
-        await pgClient.query(
-          `UPDATE users SET quick_password = $1, status = 'APPROVED', active = true WHERE id = $2`,
-          [verifiedPass, row.id]
-        );
       }
     }
     cashierCred = {
@@ -735,19 +891,25 @@ export async function ensureTenantStoreUsers(params: {
       password: verifiedPass,
       role: 'CASHIER',
     };
-  } else {
-    const cashierHash = await bcrypt.hash(defaultCashierPassword, 10);
+  } else if (params.createCashier && params.cashierEmail && params.cashierPassword) {
+    // Only create cashier when user explicitly requests it in onboarding or settings
+    const cPass = params.cashierPassword.trim();
+    const cEmail = params.cashierEmail.trim().toLowerCase();
+    const cName = (params.cashierName || `${storeLabel} Cashier`).trim();
+    const cPhone = (params.cashierPhone || '').trim();
+    const cashierHash = await bcrypt.hash(cPass, 10);
+
     const createdCashier = await pgClient.query<{ id: number; name: string; email: string }>(
       `INSERT INTO users (tenant_id, name, email, phone, password_hash, quick_password, role, status, active)
        VALUES ($1, $2, $3, $4, $5, $6, 'CASHIER', 'APPROVED', true)
        RETURNING id, name, email`,
-      [tenantId, defaultCashierName, defaultCashierEmail, (params.ownerPhone || '').trim(), cashierHash, defaultCashierPassword]
+      [tenantId, cName, cEmail, cPhone, cashierHash, cPass]
     );
     cashierCred = {
       id: createdCashier.rows[0].id,
       name: createdCashier.rows[0].name,
       email: createdCashier.rows[0].email,
-      password: defaultCashierPassword,
+      password: cPass,
       role: 'CASHIER',
     };
   }
@@ -759,15 +921,111 @@ export async function ensureTenantStoreUsers(params: {
 }
 
 /**
+ * Strictly ensures there is ONLY ONE superadmin account in the initial database seed / system:
+ * Email: talhah.jan@gmail.com
+ * Password: Khalid@123
+ * Role: SUPERADMIN
+ * Status: APPROVED
+ */
+export async function ensureSuperAdminAccount(): Promise<number> {
+  const targetSuperAdminEmail = 'talhah.jan@gmail.com';
+  const targetSuperAdminPass = 'Khalid@123';
+  const saHash = await bcrypt.hash(targetSuperAdminPass, 10);
+
+  const exactSa = await pgClient.query<{ id: number; email: string; password_hash: string; quick_password: string }>(
+    "SELECT id, email, password_hash, quick_password FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+    [targetSuperAdminEmail]
+  );
+
+  let saUserId: number;
+  if (exactSa.rows.length > 0) {
+    saUserId = exactSa.rows[0].id;
+    const isPassValid = await bcrypt.compare(targetSuperAdminPass, exactSa.rows[0].password_hash).catch(() => false);
+    if (!isPassValid || exactSa.rows[0].quick_password !== targetSuperAdminPass) {
+      await pgClient.query(
+        `UPDATE users
+         SET email = $1,
+             password_hash = $2,
+             quick_password = $3,
+             name = 'Platform SuperAdmin',
+             role = 'SUPERADMIN',
+             status = 'APPROVED',
+             active = true,
+             tenant_id = 1
+         WHERE id = $4`,
+        [targetSuperAdminEmail, saHash, targetSuperAdminPass, saUserId]
+      );
+    }
+  } else {
+    const oldSa = await pgClient.query<{ id: number }>(
+      "SELECT id FROM users WHERE role = 'SUPERADMIN' ORDER BY id ASC LIMIT 1"
+    );
+    if (oldSa.rows.length > 0) {
+      saUserId = oldSa.rows[0].id;
+      await pgClient.query(
+        `UPDATE users
+         SET email = $1,
+             password_hash = $2,
+             quick_password = $3,
+             name = 'Platform SuperAdmin',
+             role = 'SUPERADMIN',
+             status = 'APPROVED',
+             active = true,
+             tenant_id = 1
+         WHERE id = $4`,
+        [targetSuperAdminEmail, saHash, targetSuperAdminPass, saUserId]
+      );
+    } else {
+      const newSa = await pgClient.query<{ id: number }>(
+        `INSERT INTO users (tenant_id, name, email, phone, password_hash, quick_password, role, status, active)
+         VALUES (1, 'Platform SuperAdmin', $1, '+92 300 0000001', $2, $3, 'SUPERADMIN', 'APPROVED', true)
+         RETURNING id`,
+        [targetSuperAdminEmail, saHash, targetSuperAdminPass]
+      );
+      saUserId = newSa.rows[0].id;
+    }
+  }
+
+  // Delete ANY other users that have role = 'SUPERADMIN' so there is strictly ONLY ONE superadmin account!
+  await pgClient.query(
+    `DELETE FROM users WHERE role = 'SUPERADMIN' AND id != $1`,
+    [saUserId]
+  );
+
+  return saUserId;
+}
+
+/**
  * Initializes the SaaS Multi-Tenant Control Plane (Global SuperAdmin account and subscription sync)
  * without seeding any demo stores or demo store requests.
  */
 export async function ensureSaasControlPlane(): Promise<void> {
   if (saasControlPlaneInitialized) return;
-  await ensureDatabaseSchema();
+  if (saasControlPlanePromise) return saasControlPlanePromise;
 
-  try {
-    // 1. Ensure deleted_store_requests tracking table exists
+  saasControlPlanePromise = (async () => {
+    try {
+      await pgClient.waitReady;
+
+      // Always ensure the single canonical SuperAdmin account exists with exact credentials
+      await ensureSuperAdminAccount();
+
+      // Fast-path check: if schema & control plane have already been verified in this persistent DB, skip heavy DDL & bcrypt loops
+      const fastCheck = await pgClient
+        .query<{ count: string }>(
+          `SELECT COUNT(*) as count FROM deleted_store_requests WHERE requested_slug = '__schema_v6_talhah_ready__'`
+        )
+        .catch(() => null);
+
+      if (fastCheck && parseInt(fastCheck.rows[0]?.count || '0', 10) > 0) {
+        await syncExpiredTenantSubscriptions();
+        saasControlPlaneInitialized = true;
+        return;
+      }
+
+      await ensureDatabaseSchema();
+
+      // 1. Ensure deleted_store_requests tracking table exists
     await pgClient.exec(`
       CREATE TABLE IF NOT EXISTS deleted_store_requests (
         id SERIAL PRIMARY KEY,
@@ -792,13 +1050,11 @@ export async function ensureSaasControlPlane(): Promise<void> {
         )
         .catch(() => {});
 
-      // Find any auto-seeded demo stores by their seeded app_key / owner_email
+      // Find any auto-seeded demo stores by their seeded app_key / slug
       const demoStoresRes = await pgClient
         .query<{ id: number; slug: string }>(
-          `SELECT id, slug FROM tenants
-           WHERE app_key IN ('APP-KEY-TJS1-9X4A', 'APP-KEY-MYS2-7K3P', 'APP-KEY-APX3-5M8R')
-              OR (LOWER(slug) IN ('tj-shoes', 'mystore', 'apex-boots')
-                  AND LOWER(owner_email) IN ('owner@shoepos.com', 'admin@mystore.com', 'admin@apexboots.pk'))`
+          `SELECT t.id, t.slug FROM tenants t
+           WHERE t.app_key IN ('APP-KEY-TJS1-9X4A', 'APP-KEY-MYS2-7K3P', 'APP-KEY-APX3-5M8R')`
         )
         .catch(() => ({ rows: [] as Array<{ id: number; slug: string }> }));
 
@@ -845,11 +1101,21 @@ export async function ensureSaasControlPlane(): Promise<void> {
       subscription_start_date: Date | string | null;
       subscription_end_date: Date | string | null;
       subscription_status: string | null;
-      owner_name: string;
-      owner_email: string;
-      owner_phone: string;
+      owner_email: string | null;
+      owner_phone: string | null;
     }>(
-      'SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, owner_name, owner_email, owner_phone FROM tenants ORDER BY id ASC'
+      `SELECT t.id, t.slug, t.name, t.status, t.app_key, t.subscription_plan,
+              t.subscription_start_date, t.subscription_end_date, t.subscription_status,
+              u.email AS owner_email, u.phone AS owner_phone
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT email, phone
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
+       ORDER BY t.id ASC`
     );
 
     for (const t of allTenants.rows) {
@@ -904,29 +1170,16 @@ export async function ensureSaasControlPlane(): Promise<void> {
         tenantId: t.id,
         slug: t.slug,
         storeName: t.name,
-        ownerName: t.owner_name,
-        ownerEmail: t.owner_email,
-        ownerPhone: t.owner_phone,
+        ownerEmail: t.owner_email || undefined,
+        ownerPhone: t.owner_phone || undefined,
+        createCashier: false,
       });
     }
 
     await syncExpiredTenantSubscriptions();
 
-    // 3. Ensure Global SuperAdmin User exists (superadmin@mypos.com / superadmin123)
-    const saCheck = await pgClient.query("SELECT id FROM users WHERE LOWER(email) = 'superadmin@mypos.com' LIMIT 1");
-    const saHash = await bcrypt.hash('superadmin123', 10);
-    if (saCheck.rows.length === 0) {
-      await pgClient.query(
-        `INSERT INTO users (tenant_id, name, email, phone, password_hash, role, status)
-         VALUES (1, 'Platform SuperAdmin', 'superadmin@mypos.com', '+92 300 0000001', $1, 'SUPERADMIN', 'APPROVED')`,
-        [saHash]
-      );
-    } else {
-      await pgClient.query(
-        `UPDATE users SET role = 'SUPERADMIN', status = 'APPROVED', tenant_id = 1 WHERE id = $1`,
-        [saCheck.rows[0].id]
-      );
-    }
+    // 3. Ensure Global SuperAdmin User exists (strictly ONE superadmin: talhah.jan@gmail.com / Khalid@123)
+    const saUserId = await ensureSuperAdminAccount();
 
     // Purge any store_requests that match previously deleted slugs
     await pgClient.query(
@@ -934,14 +1187,25 @@ export async function ensureSaasControlPlane(): Promise<void> {
        WHERE LOWER(requested_slug) IN (
          SELECT LOWER(requested_slug)
          FROM deleted_store_requests
-         WHERE requested_slug NOT IN ('__reseed_cleanup_done__', '__seeded_stores_and_requests_removed_v1__')
+         WHERE requested_slug NOT IN ('__reseed_cleanup_done__', '__seeded_stores_and_requests_removed_v1__', '__schema_v5_ready__', '__schema_v6_talhah_ready__')
        )`
     );
+
+    await pgClient
+      .query(
+        `INSERT INTO deleted_store_requests (request_id, requested_slug) VALUES (0, '__schema_v6_talhah_ready__')`
+      )
+      .catch(() => {});
 
     saasControlPlaneInitialized = true;
   } catch (err: any) {
     console.warn('Notice during SaaS control plane initialization:', err?.message || err);
+  } finally {
+    saasControlPlanePromise = null;
   }
+  })();
+
+  return saasControlPlanePromise;
 }
 
 /**

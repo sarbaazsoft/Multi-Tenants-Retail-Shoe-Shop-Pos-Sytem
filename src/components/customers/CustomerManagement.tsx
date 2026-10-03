@@ -59,8 +59,8 @@ export const CustomerManagement: React.FC<CustomerManagementProps> = ({ companyS
     try {
       const res = await api.customers.list(searchTerm.trim() || undefined);
       setCustomers(res.customers || []);
-    } catch (e) {
-      console.error('Failed to load customers:', e);
+    } catch (e: any) {
+      console.warn('Notice loading customers:', e?.message || e);
     } finally {
       isRefreshingRef.current = false;
       setIsLoading(false);
@@ -83,8 +83,8 @@ export const CustomerManagement: React.FC<CustomerManagementProps> = ({ companyS
     try {
       const res = await api.customers.get(id);
       setSelectedCustomer(res.customer ? { ...res.customer, sales: res.sales || [] } : null);
-    } catch (e) {
-      console.error('Failed to fetch customer details:', e);
+    } catch (e: any) {
+      console.warn('Notice fetching customer details:', e?.message || e);
     } finally {
       setIsLoadingHistory(false);
     }

@@ -73,7 +73,11 @@ export async function checkInstallationStatus(): Promise<InstallationStatus> {
     if (hasSettingsTable) {
       try {
         const settingsRes = await pgClient.query<any>(
-          'SELECT id, name, is_installed, currency, currency_symbol FROM company_settings LIMIT 1'
+          `SELECT cs.id, COALESCE(t.name, 'Retail Store') AS name, cs.is_installed, cs.currency, cs.currency_symbol
+           FROM company_settings cs
+           LEFT JOIN tenants t ON t.id = cs.tenant_id
+           ORDER BY cs.id ASC
+           LIMIT 1`
         );
         if (settingsRes.rows.length > 0) {
           isSettingsConfigured = true;

@@ -30,7 +30,12 @@ import { ShoeExchangeModal } from './ShoeExchangeModal.tsx';
 import { formatStockPrice, cleanStockPriceInput, getProductRetailPrice, getProductMinFloorPrice } from '../../utils/priceFormat.ts';
 import type { ActiveExchange } from '../../types.ts';
 import { offlineQueueService } from '../../services/offlineQueueService.ts';
-import { lookupCachedProductOffline, searchCachedProductsOffline } from '../../utils/offlineDb.ts';
+import {
+  cacheCatalogOffline,
+  lookupCachedProductOffline,
+  searchCachedProductsOffline,
+  resolveActiveStoreSubdomain,
+} from '../../utils/offlineDb.ts';
 import { useOfflineSync } from '../../utils/useOfflineSync.ts';
 import { OfflineSyncModal } from './OfflineSyncModal.tsx';
 import { BrandLogo } from '../common/BrandLogo.tsx';
@@ -187,9 +192,26 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const [isOfflineModalOpen, setIsOfflineModalOpen] = useState(false);
   const [offlineNotice, setOfflineNotice] = useState<string | null>(null);
 
-  // Load Customers
+  const activeStoreSlug = resolveActiveStoreSubdomain(
+    companySettings?.slug || currentUser?.storeSubdomain || currentUser?.slug || null
+  );
+
+  // Sync and cache store catalog products for offline billing
+  const syncStoreCatalogForOffline = async () => {
+    try {
+      const res = await api.products.list({ limit: 500 });
+      if (res?.products && Array.isArray(res.products) && res.products.length > 0) {
+        await cacheCatalogOffline(res.products, activeStoreSlug);
+      }
+    } catch {
+      // Offline cache will be used
+    }
+  };
+
+  // Load Customers & Prime Store Offline Product Cache
   useEffect(() => {
     loadCustomers();
+    syncStoreCatalogForOffline();
     // Auto-focus scanner on mount
     focusScannerInput();
 
@@ -198,7 +220,13 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, []);
+  }, [activeStoreSlug]);
+
+  useEffect(() => {
+    if (isOnline) {
+      syncStoreCatalogForOffline();
+    }
+  }, [isOnline, activeStoreSlug]);
 
   // Sync initial exchange from parent / Returns view
   useEffect(() => {
@@ -393,7 +421,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     };
   }, [cart, isSubmitting, showAdminOverrideModal, completedSale, isCustomerModalOpen, barcodeInput, inputMode, continuousScan, activeExchange]);
 
-  // Core 'Find Product' Event: Triggered immediately when barcode or SKU is scanned or entered
+  // Core 'Find Product' Event: Triggered immediately when barcode, SKU, or article is scanned or entered
   const triggerFindAndAddProduct = async (rawCode: string) => {
     const query = rawCode.trim();
     if (!query || isFindingProductRef.current) return;
@@ -402,35 +430,41 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     setErrorMessage(null);
 
     try {
-      // 1. Direct fast lookup by Barcode or SKU
-      const res = await api.products.lookupBarcode(query).catch(() => null);
-      let matchedProduct = res?.product;
+      let matchedProduct: any = null;
+      const isCurrentlyOffline = !isOnline || (typeof navigator !== 'undefined' && !navigator.onLine);
 
-      // 2. If not found by direct lookup, search catalog list (SKU, barcode, or article name)
-      if (!matchedProduct) {
-        const searchRes = await api.products.list({ search: query }).catch(() => ({ products: [] }));
-        if (searchRes.products && searchRes.products.length > 0) {
-          matchedProduct =
-            searchRes.products.find(
-              (p: any) =>
-                (p.sku && p.sku.toLowerCase() === query.toLowerCase()) ||
-                (p.barcode && p.barcode.toLowerCase() === query.toLowerCase()) ||
-                (p.article && p.article.toLowerCase() === query.toLowerCase())
-            ) || searchRes.products[0];
+      // 1. If online, attempt direct lookup by Barcode/SKU/Article and catalog search
+      if (!isCurrentlyOffline) {
+        const res = await api.products.lookupBarcode(query).catch(() => null);
+        matchedProduct = res?.product;
+
+        if (!matchedProduct) {
+          const searchRes = await api.products.list({ search: query }).catch(() => ({ products: [] }));
+          if (searchRes.products && searchRes.products.length > 0) {
+            await cacheCatalogOffline(searchRes.products, activeStoreSlug).catch(() => {});
+            matchedProduct =
+              searchRes.products.find(
+                (p: any) =>
+                  (p.sku && p.sku.toLowerCase() === query.toLowerCase()) ||
+                  (p.barcode && p.barcode.toLowerCase() === query.toLowerCase()) ||
+                  (p.article && p.article.toLowerCase() === query.toLowerCase()) ||
+                  (p.name && p.name.toLowerCase() === query.toLowerCase())
+              ) || searchRes.products[0];
+          }
         }
       }
 
-      // 3. OFFLINE FALLBACK: If network failed or server unreachable, lookup from browser IndexedDB
+      // 2. OFFLINE & STORE CACHE LOOKUP: Lookup from store-subdomain-scoped offline catalog cache
       if (!matchedProduct) {
-        const cached = await lookupCachedProductOffline(query).catch(() => null);
+        const cached = await lookupCachedProductOffline(query, activeStoreSlug).catch(() => null);
         if (cached) {
           matchedProduct = {
             ...cached,
-            totalStock: cached.totalStock ?? cached.total_stock ?? 999,
+            totalStock: cached.totalStock ?? cached.total_stock ?? 0,
             costPrice: parseFloat(cached.costPrice || cached.cost_price || 0),
-            minSalePrice: parseFloat(cached.minSalePrice || cached.min_sale_price || 0),
-            maxSalePrice: parseFloat(cached.maxSalePrice || cached.max_sale_price || 0),
-            salePrice: parseFloat(cached.salePrice || cached.sale_price || 0),
+            minSalePrice: parseFloat(cached.minSalePrice || cached.min_sale_price || cached.minPrice || 0),
+            maxSalePrice: parseFloat(cached.maxSalePrice || cached.max_sale_price || cached.maxPrice || 0),
+            salePrice: parseFloat(cached.salePrice || cached.sale_price || cached.sellingPrice || cached.price || 0),
           };
         }
       }
@@ -515,27 +549,25 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const handleSearchChange = async (val: string) => {
     setBarcodeInput(val);
 
-    // In Barcode Scanner mode, suppress live search dropdown for raw hardware speed and clean Enter listening
+    const now = performance.now();
+    const interval = now - lastKeyTimeRef.current;
+    lastKeyTimeRef.current = now;
+
+    // Detect hardware barcode scanner (very rapid key intervals < 45ms)
+    if (interval < 45) {
+      scanBurstCountRef.current += 1;
+    } else {
+      scanBurstCountRef.current = 1;
+    }
+
     if (inputMode === 'SCANNER') {
-      setSearchResults([]);
-
-      const now = performance.now();
-      const interval = now - lastKeyTimeRef.current;
-      lastKeyTimeRef.current = now;
-
-      // Detect hardware barcode scanner (very rapid key intervals < 45ms)
-      if (interval < 45) {
-        scanBurstCountRef.current += 1;
-      } else {
-        scanBurstCountRef.current = 1;
-      }
-
       if (autoLookupTimerRef.current) {
         clearTimeout(autoLookupTimerRef.current);
       }
 
       // Fallback for hardware scanners that do not send an Enter suffix (5+ keys in rapid burst)
       if (scanBurstCountRef.current >= 4 && val.trim().length >= 6) {
+        setSearchResults([]);
         autoLookupTimerRef.current = setTimeout(() => {
           const query = val.trim();
           if (!continuousScan) {
@@ -543,18 +575,45 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           }
           triggerFindAndAddProduct(query);
         }, 65);
+        return;
+      }
+
+      // If cashier is typing manually (or in offline mode) in the top input, show matching catalog articles
+      if (val.trim().length >= 1 && scanBurstCountRef.current < 4) {
+        const isCurrentlyOffline = !isOnline || (typeof navigator !== 'undefined' && !navigator.onLine);
+        if (isCurrentlyOffline) {
+          const offlineResults = await searchCachedProductsOffline(val.trim(), activeStoreSlug).catch(() => []);
+          setSearchResults(offlineResults);
+          return;
+        }
+        try {
+          const res = await api.products.list({ search: val.trim() });
+          const list = res.products || [];
+          setSearchResults(list);
+        } catch {
+          const offlineResults = await searchCachedProductsOffline(val.trim(), activeStoreSlug).catch(() => []);
+          setSearchResults(offlineResults);
+        }
+      } else {
+        setSearchResults([]);
       }
       return;
     }
 
-    // Manual typing search
-    if (val.trim().length >= 2) {
+    // Manual / Catalog Search mode: show matching articles from online or store-scoped offline catalog
+    if (val.trim().length >= 1) {
+      const isCurrentlyOffline = !isOnline || (typeof navigator !== 'undefined' && !navigator.onLine);
+      if (isCurrentlyOffline) {
+        const offlineResults = await searchCachedProductsOffline(val.trim(), activeStoreSlug).catch(() => []);
+        setSearchResults(offlineResults);
+        return;
+      }
       try {
         const res = await api.products.list({ search: val.trim() });
         const list = res.products || [];
         setSearchResults(list);
 
-        // If exact barcode or SKU match is encountered, auto-trigger immediately
+        // If exact barcode match is encountered, auto-trigger immediately
         const exactBarcodeMatch = list.find(
           (p: any) =>
             p.barcode && p.barcode.toLowerCase() === val.trim().toLowerCase()
@@ -563,12 +622,13 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           triggerFindAndAddProduct(val);
         }
       } catch {
-        // Fallback to local IndexedDB product search
-        const offlineResults = await searchCachedProductsOffline(val.trim()).catch(() => []);
+        // Fallback to store-scoped local IndexedDB/LocalStorage product search
+        const offlineResults = await searchCachedProductsOffline(val.trim(), activeStoreSlug).catch(() => []);
         setSearchResults(offlineResults);
       }
     } else {
-      setSearchResults([]);
+      const offlineResults = await searchCachedProductsOffline('', activeStoreSlug, 30).catch(() => []);
+      setSearchResults(offlineResults);
     }
   };
 
@@ -918,12 +978,15 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     } catch (err: any) {
       // If server unreachable or connection dropped mid-call, gracefully offer offline queuing
       const isNetError =
-        err?.message &&
-        (err.message.includes('Failed to fetch') ||
-          err.message.includes('NetworkError') ||
-          err.message.includes('Network request failed') ||
-          err.message.includes('502') ||
-          err.message.includes('503'));
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        (err?.message &&
+          (err.message.includes('Failed to fetch') ||
+            err.message.includes('temporarily reconnecting') ||
+            err.message.includes('NetworkError') ||
+            err.message.includes('Network request failed') ||
+            err.message.includes('502') ||
+            err.message.includes('503') ||
+            err.message.includes('504')));
 
       if (isNetError) {
         try {
@@ -1034,9 +1097,15 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                 <button
                   type="button"
                   id="pos-mode-manual-btn"
-                  onClick={() => {
+                  onClick={async () => {
                     setInputMode('MANUAL');
                     focusScannerInput();
+                    const cachedList = await searchCachedProductsOffline(
+                      barcodeInput.trim(),
+                      activeStoreSlug,
+                      30
+                    ).catch(() => []);
+                    setSearchResults(cachedList);
                   }}
                   className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                     inputMode === 'MANUAL'

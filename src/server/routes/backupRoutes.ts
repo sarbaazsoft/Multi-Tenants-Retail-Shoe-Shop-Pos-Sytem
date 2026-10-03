@@ -56,10 +56,10 @@ router.get('/stats', requireAuth, requireAdmin, async (_req: AuthenticatedReques
       }
     }
 
-    // Get current shop name
+    // Get current shop name from tenants (single source of truth)
     let storeName = 'Shoe Shop POS';
     try {
-      const shopRes = await pgClient.query<any>('SELECT name FROM company_settings LIMIT 1');
+      const shopRes = await pgClient.query<any>('SELECT name FROM tenants ORDER BY id ASC LIMIT 1');
       if (shopRes.rows.length > 0 && shopRes.rows[0].name) {
         storeName = shopRes.rows[0].name;
       }
@@ -101,11 +101,14 @@ router.get('/export', requireAuth, requireAdmin, async (req: AuthenticatedReques
       }
     }
 
-    // Store metadata
+    // Store metadata from tenants
     let storeName = 'Shoe Shop POS';
-    if (exportedData.company_settings && exportedData.company_settings.length > 0) {
-      storeName = exportedData.company_settings[0].name || storeName;
-    }
+    try {
+      const shopRes = await pgClient.query<any>('SELECT name FROM tenants ORDER BY id ASC LIMIT 1');
+      if (shopRes.rows.length > 0 && shopRes.rows[0].name) {
+        storeName = shopRes.rows[0].name;
+      }
+    } catch (_) {}
 
     const backupPayload = {
       meta: {
@@ -230,6 +233,8 @@ router.post('/restore', requireAuth, requireAdmin, async (req: AuthenticatedRequ
           // Strip any fields that don't belong to schema if necessary, or sanitize
           const cleanRow = { ...row };
           if (tableName === 'company_settings') {
+            delete cleanRow.name;
+            delete cleanRow.tax_number;
             delete cleanRow.min_profit_margin;
             delete cleanRow.max_profit_margin;
             delete cleanRow.fixed_profit_margin;

@@ -1,24 +1,115 @@
 /**
- * AUTOMATIC SKU & ARTICLE GENERATION LOGIC
+ * AUTOMATIC SKU & ARTICLE GENERATION LOGIC (STORE-WIDE PRODUCT NUMBER, NO ZERO-PADDING)
  *
  * Formula:
- * - SKU: [Brand Prefix]-[Article]-[Product ID]
- * - Suggested Article: [Category Abbreviation]-[4-digit padded Product ID] (e.g. SN-0001)
- *
- * Prefix parsing logic:
- * - Brand Prefix: 3-character abbreviation parsed from Brand Name
- * - Category Abbreviation: strictly 2 alphabet characters parsed from Category Name
- *   1. For a single word with 2+ letters: take the first 2 letters (e.g., "Sneakers" -> "SN", "Boots" -> "BO", "Casual" -> "CA")
- *   2. For a single word with 1 letter: pad with "X" to 2 characters (e.g., "S" -> "SX")
- *   3. For two or more words: take the first letter of word 1 + first letter of word 2 (e.g., "Men Shoes" -> "MS", "Sports Shoes" -> "SS")
- *
- * Article:
- * - Mandatory field
- * - Auto-suggests as [Category Abbreviation]-[4-digit padded Product ID] (e.g. SN-0001, BO-0007), fully editable
- *
- * Product ID:
- * - Auto-incrementing, non-reusable integer
+ * - Store Product ID (N): Per-store count (recycled from deleted_product_ids first, else store COUNT(*) + 1)
+ *   Uses exact integer without zero-padding (e.g., 1, 7, 9, 12, 129).
+ * - Suggested Article: [2-Letter Category Abbreviation]-[Exact Product ID] (e.g. SN-1, BO-7, TD-12, CA-129)
+ * - SKU: [3-Letter Brand Prefix]-[Article]-[Exact Product ID] (e.g. NIK-SN-9-9)
  */
+
+const STANDARD_CATEGORY_PREFIX_MAP: Record<string, string> = {
+  MEN: 'MN',
+  'MEN SHOES': 'MS',
+  "MEN'S SHOES": 'MS',
+  MENS: 'MN',
+  WOMEN: 'WM',
+  'WOMEN SHOES': 'WS',
+  "WOMEN'S SHOES": 'WS',
+  WOMENS: 'WM',
+  LADIES: 'LD',
+  'LADIES SHOES': 'LS',
+  KIDS: 'KD',
+  'KIDS SHOES': 'KS',
+  CHILDREN: 'CH',
+  TODDLER: 'TD',
+  TODDLERS: 'TD',
+  'TODDLER SHOES': 'TD',
+  INFANT: 'IN',
+  INFANTS: 'IN',
+  BABY: 'BB',
+  SNEAKERS: 'SN',
+  SNEAKER: 'SN',
+  BOOTS: 'BO',
+  BOOT: 'BO',
+  CASUAL: 'CA',
+  'CASUAL SHOES': 'CS',
+  FORMAL: 'FM',
+  'FORMAL SHOES': 'FS',
+  SPORTS: 'SP',
+  'SPORTS SHOES': 'SS',
+  RUNNING: 'RN',
+  'RUNNING SHOES': 'RS',
+  SANDALS: 'SD',
+  SANDAL: 'SD',
+  'SANDALS & SLIPPERS': 'SS',
+  SLIPPERS: 'SL',
+  SLIPPER: 'SL',
+  CHAPPAL: 'CP',
+  LOAFERS: 'LF',
+  LOAFER: 'LF',
+  SCHOOL: 'SC',
+  'SCHOOL SHOES': 'SC',
+  JOGGERS: 'JG',
+  HEELS: 'HL',
+  FLATS: 'FL',
+};
+
+export const STANDARD_FOOTWEAR_CATEGORIES: string[] = [
+  'Men',
+  'Women',
+  'Kids',
+  'Toddler',
+  'Infant',
+];
+
+/**
+ * Normalizes any category string into one of the 5 pre-saved store footwear categories:
+ * Men, Women, Kids, Toddler, Infant
+ */
+export function normalizeFootwearCategory(raw: string | undefined | null): string {
+  const clean = String(raw || '').trim();
+  if (!clean) return 'Men';
+  const lower = clean.toLowerCase();
+
+  const exact = STANDARD_FOOTWEAR_CATEGORIES.find((c) => c.toLowerCase() === lower);
+  if (exact) return exact;
+
+  if (lower === 'toddler' || lower === 'toddlers' || lower.includes('toddler')) {
+    return 'Toddler';
+  }
+  if (lower === 'infant' || lower === 'infants' || lower.includes('infant') || lower.includes('baby')) {
+    return 'Infant';
+  }
+  if (
+    lower === 'kids' ||
+    lower === 'kid' ||
+    lower.includes('kid') ||
+    lower.includes('child') ||
+    lower.includes('boy') ||
+    lower.includes('girl') ||
+    lower.includes('school')
+  ) {
+    return 'Kids';
+  }
+  if (
+    lower === 'women' ||
+    lower === 'womens' ||
+    lower.startsWith('women ') ||
+    lower.includes("women's") ||
+    lower.includes('ladies') ||
+    lower.includes('heel') ||
+    lower.includes('pump') ||
+    lower.includes('flat')
+  ) {
+    return 'Women';
+  }
+  if (lower === 'men' || lower === 'mens' || lower.startsWith('men ') || lower.includes("men's") || lower.includes('gents')) {
+    return 'Men';
+  }
+
+  return 'Men';
+}
 
 /**
  * Parses abbreviation prefix from a name (default 3-character for Brand)
@@ -70,9 +161,9 @@ export const parseBrandPrefix = parsePrefix;
 
 /**
  * Parses a strictly 2-alphabet abbreviation from Category name.
- * 
+ *
  * Rules:
- * - Limited strictly to 2 uppercase alphabet characters (A-Z).
+ * - Checks canonical footwear category map first (e.g., "Toddler" / "Toddler Shoes" -> "TD")
  * - Single word with 2+ letters: first 2 letters (e.g. "Sneakers" -> "SN", "Boots" -> "BO", "Casual" -> "CA")
  * - Single letter word: pad with "X" (e.g. "S" -> "SX")
  * - Two or more words: first letter of word 1 + first letter of word 2 (e.g. "Men Shoes" -> "MS", "Sports Shoes" -> "SS")
@@ -83,17 +174,25 @@ export function parseCategoryPrefix(name: string | undefined | null): string {
     return 'CA';
   }
 
-  // Remove apostrophes, then keep only alphabetic characters (A-Z)
-  const cleaned = name
-    .toUpperCase()
-    .replace(/['’]/g, '')
-    .replace(/[^A-Z\s]/g, ' ')
-    .trim();
+  const rawUpper = name.toUpperCase().replace(/['’]/g, '').trim();
+  if (STANDARD_CATEGORY_PREFIX_MAP[rawUpper]) {
+    return STANDARD_CATEGORY_PREFIX_MAP[rawUpper];
+  }
+
+  // Keep only alphabetic characters (A-Z)
+  const cleaned = rawUpper.replace(/[^A-Z\s]/g, ' ').trim();
+  if (STANDARD_CATEGORY_PREFIX_MAP[cleaned]) {
+    return STANDARD_CATEGORY_PREFIX_MAP[cleaned];
+  }
 
   const words = cleaned.split(/\s+/).filter(Boolean);
 
   if (words.length === 0) {
     return 'CA';
+  }
+
+  if (words[0] === 'TODDLER' || words[0] === 'TODDLERS') {
+    return 'TD';
   }
 
   if (words.length === 1) {
@@ -116,36 +215,48 @@ export function parseCategoryPrefix(name: string | undefined | null): string {
 }
 
 /**
- * Generates the suggested Article: [2-alphabet Category Abbreviation]-[4-digit padded Product ID]
- * Adds a hyphen (-) in the middle: Abbreviation + '-' + articleid padded with zeros
- * e.g., Category = "Sneakers" ("SN"), Product ID = 1 -> "SN-0001"
- * e.g., Category = "Boots" ("BO"), Product ID = 7 -> "BO-0007"
- * e.g., Category = "Men Shoes" ("MS"), Product ID = 24 -> "MS-0024"
+ * Generates the suggested Article: [2-alphabet Category Abbreviation]-[Product ID padded to 2 digits if 1-9]
+ * Adds 1 leading zero ONLY for IDs 1-9 (01..09); IDs 10+ remain exact (10, 12, 129):
+ * e.g., Category = "Men" ("MN"), Product ID = 1 -> "MN-01"
+ * e.g., Category = "Women" ("WM"), Product ID = 9 -> "WM-09"
+ * e.g., Category = "Toddler" ("TD"), Product ID = 12 -> "TD-12"
+ * e.g., Category = "Men" ("MN"), Product ID = 129 -> "MN-129"
  */
 export function generateSuggestedArticle(
   categoryPrefixOrName: string | undefined | null,
   productId: number | string | undefined | null
 ): string {
-  const prefix = parseCategoryPrefix(categoryPrefixOrName);
-  const id = parseInt(String(productId ?? '').replace(/\D/g, ''), 10) || 1;
-  const paddedId = String(id).padStart(4, '0');
-  return `${prefix}-${paddedId}`;
+  const cleanInput = String(categoryPrefixOrName || '').trim().toUpperCase();
+  const prefix =
+    /^[A-Z]{2}$/.test(cleanInput) ? cleanInput : parseCategoryPrefix(categoryPrefixOrName);
+  const id = Math.max(1, parseInt(String(productId ?? '').replace(/\D/g, ''), 10) || 1);
+  const formattedId = id >= 1 && id <= 9 ? `0${id}` : String(id);
+  return `${prefix}-${formattedId}`;
 }
 
 /**
  * Generates the automated SKU: [Brand Prefix]-[Article Number]-[Product ID]
- * Format: ${brandCode}-${articleNumber}-${productId} (e.g., DAF-SF-0012-1)
+ * Format: ${brandCode}-${articleNumber}-${productId} (e.g., NIK-MN-09-9)
  */
 export function generateSku(
   brandPrefixOrName: string | undefined | null,
   article: string | undefined | null,
   productIdInput?: number | string | null
 ): string {
-  const brandCode = parseBrandPrefix(brandPrefixOrName);
-  const articleNumber = (article || 'SF-0001').toUpperCase().trim();
-  const rawId = productIdInput !== undefined && productIdInput !== null ? String(productIdInput).trim().toUpperCase() : '';
+  const cleanBrandInput = String(brandPrefixOrName || '').trim().toUpperCase();
+  const brandCode =
+    /^[A-Z0-9]{3}$/.test(cleanBrandInput) ? cleanBrandInput : parseBrandPrefix(brandPrefixOrName);
+  const idNum =
+    productIdInput !== undefined && productIdInput !== null
+      ? Math.max(1, parseInt(String(productIdInput).replace(/\D/g, ''), 10) || 1)
+      : null;
+  const articleNumber = (
+    article || (idNum ? generateSuggestedArticle('MN', idNum) : 'MN-01')
+  )
+    .toUpperCase()
+    .trim();
 
-  return rawId ? `${brandCode}-${articleNumber}-${rawId}` : `${brandCode}-${articleNumber}`;
+  return idNum !== null ? `${brandCode}-${articleNumber}-${idNum}` : `${brandCode}-${articleNumber}`;
 }
 
 export interface SkuComponents {
@@ -154,13 +265,12 @@ export interface SkuComponents {
   article: string;
   productId: number;
   sku: string;
+  barcode: string;
   formula: string;
 }
 
 /**
  * Helper to build all components together.
- * Supports:
- * - buildSkuInfo(brandName, categoryName, articleInput, productIdInput)
  */
 export function buildSkuInfo(
   brandName: string | undefined | null,
@@ -177,25 +287,28 @@ export function buildSkuInfo(
   if (productIdInput !== undefined && productIdInput !== null) {
     categoryPrefix = parseCategoryPrefix(categoryOrArticle);
     const rawVal = String(productIdInput).trim();
-    productId = parseInt(rawVal.replace(/\D/g, ''), 10) || 1;
+    productId = Math.max(1, parseInt(rawVal.replace(/\D/g, ''), 10) || 1);
     const artInput = typeof articleInput === 'string' ? articleInput : '';
-    article = artInput && artInput.trim()
-      ? artInput.trim().toUpperCase()
-      : generateSuggestedArticle(categoryPrefix, productId);
+    article =
+      artInput && artInput.trim()
+        ? artInput.trim().toUpperCase()
+        : generateSuggestedArticle(categoryPrefix, productId);
   } else if (
     typeof articleInput === 'number' ||
     (typeof articleInput === 'string' && /^\d+$/.test(articleInput.trim()))
   ) {
     categoryPrefix = parseCategoryPrefix(categoryOrArticle);
-    productId = parseInt(String(articleInput).replace(/\D/g, ''), 10) || 1;
+    productId = Math.max(1, parseInt(String(articleInput).replace(/\D/g, ''), 10) || 1);
     article = generateSuggestedArticle(categoryPrefix, productId);
   } else {
-    article = categoryOrArticle && categoryOrArticle.trim()
-      ? categoryOrArticle.trim().toUpperCase()
-      : generateSuggestedArticle('CA', 1);
+    article =
+      categoryOrArticle && categoryOrArticle.trim()
+        ? categoryOrArticle.trim().toUpperCase()
+        : generateSuggestedArticle('CA', 1);
   }
 
   const sku = generateSku(brandPrefix, article, productId);
+  const barcode = `${categoryPrefix}-${productId}`;
 
   return {
     brandPrefix,
@@ -203,6 +316,7 @@ export function buildSkuInfo(
     article,
     productId,
     sku,
+    barcode,
     formula: `[${brandPrefix}]-[${article}]-[${productId}]`,
   };
 }

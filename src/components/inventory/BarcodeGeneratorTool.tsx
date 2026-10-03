@@ -27,7 +27,7 @@ import {
   exportStickersToImage,
 } from '../../utils/pdfExport.ts';
 import {
-  generateEan13Barcode,
+  generateCode128Barcode,
 } from '../../utils/barcode.ts';
 import { playAudioFeedback } from '../../utils/audio.ts';
 import { useScrollActiveTab } from '../../hooks/useScrollActiveTab.ts';
@@ -90,9 +90,6 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
   const [filterLowStock, setFilterLowStock] = useState(false);
 
   // Custom SKU Generator State
-  const rawPrefix = companySettings?.barcode_prefix || companySettings?.barcodePrefix || '0108923';
-  const cleanPrefix = String(rawPrefix).replace(/\D/g, '').padEnd(7, '0').slice(0, 7);
-
   const [customSku, setCustomSku] = useState(
     initialSelectedProduct?.sku || 'APX-CAS-00101'
   );
@@ -106,7 +103,7 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
     cleanStockPriceInput(getProductRetailPrice(initialSelectedProduct, companySettings) || initialSelectedProduct?.minSalePrice || '4999')
   );
   const [customBarcode, setCustomBarcode] = useState(
-    initialSelectedProduct?.barcode || '0108923001018'
+    initialSelectedProduct?.barcode || 'MN-101'
   );
   const [customBarcodeFormat, setCustomBarcodeFormat] = useState<'CODE128' | 'EAN13'>('CODE128');
   const [customCopies, setCustomCopies] = useState<number>(2);
@@ -131,17 +128,15 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
     new Set(products.map((p) => p.brandName || p.brand_name).filter(Boolean))
   );
 
-  // Auto-generate standard EAN13 or Code128 for custom tab
+  // Auto-generate compact Store Code-128 for custom tab
   const handleAutoGenerateCustomBarcode = () => {
     try {
-      // Pick next sequence number or random 5-digit product ID
-      const randomSeq = Math.floor(10000 + Math.random() * 89999);
-      const generated = generateEan13Barcode(cleanPrefix, randomSeq);
-      setCustomBarcode(generated);
-      setCustomBarcodeFormat('EAN13');
-      setFeedbackNotice(`Generated standard 13-digit EAN barcode: ${generated}`);
+      const nextNo = Math.max(1, products.length + 1);
+      const generated = generateCode128Barcode(nextNo, customArticle || 'CA');
+      setCustomBarcode(generated.barcode);
+      setCustomBarcodeFormat('CODE128');
+      setFeedbackNotice(`Generated compact Code-128 barcode: ${generated.barcode}`);
     } catch {
-      // Fallback to Code 128 based on SKU
       setCustomBarcode(customSku.trim().toUpperCase());
       setCustomBarcodeFormat('CODE128');
     }
@@ -272,7 +267,7 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
       ? labelQueue[0]?.product || products[0] || {
           article: 'Classic Leather Loafer',
           sku: 'FTW-LOA-001',
-          barcode: '0108923000018',
+          barcode: 'MN-1',
           brandName: storeName,
           minSalePrice: 3500,
         }
@@ -572,8 +567,8 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
                     className="px-2.5 py-1.5 bg-slate-50 dark:bg-purple-500/20 border border-gray-300 dark:border-purple-400/40 text-slate-800 dark:text-purple-200 hover:bg-slate-100 dark:hover:bg-purple-500/30 dark:hover:text-white dark:shadow-[0_0_14px_rgba(147,51,234,0.2)] rounded-lg text-xs font-medium outline-none focus:border-indigo-500 dark:focus:border-purple-400 cursor-pointer"
                   >
                     <option value="all" className="dark:bg-[#120726] dark:text-purple-100">All Brands</option>
-                    {uniqueBrands.map((b) => (
-                      <option key={b} value={b} className="dark:bg-[#120726] dark:text-purple-100">
+                    {uniqueBrands.map((b, idx) => (
+                      <option key={`bgt-brand-opt-${b}-${idx}`} value={b} className="dark:bg-[#120726] dark:text-purple-100">
                         {b}
                       </option>
                     ))}
@@ -783,7 +778,7 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
                     </h3>
                   </div>
                   <span className="text-[11px] text-gray-500">
-                    Store Prefix: <strong className="font-mono">{cleanPrefix}</strong>
+                    Standard: <strong className="font-mono">Code-128</strong>
                   </span>
                 </div>
 
@@ -848,7 +843,7 @@ export const BarcodeGeneratorTool: React.FC<BarcodeGeneratorToolProps> = ({
                         className="flex items-center space-x-1 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded text-xs transition cursor-pointer"
                       >
                         <RefreshCw className="w-3 h-3" />
-                        <span>Auto EAN-13 (Prefix)</span>
+                        <span>Auto Code-128</span>
                       </button>
                     </div>
                   </div>

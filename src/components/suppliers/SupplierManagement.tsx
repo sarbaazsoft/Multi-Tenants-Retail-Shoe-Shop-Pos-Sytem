@@ -93,8 +93,8 @@ export const SupplierManagement: React.FC<SupplierManagementProps> = ({
     try {
       const res = await api.suppliers.list(query !== undefined ? query : searchTerm.trim() || undefined);
       setSuppliers(res.suppliers || []);
-    } catch (e) {
-      console.error('Failed to load suppliers:', e);
+    } catch (e: any) {
+      console.warn('Notice loading suppliers:', e?.message || e);
     } finally {
       isRefreshingRef.current = false;
       setIsLoading(false);

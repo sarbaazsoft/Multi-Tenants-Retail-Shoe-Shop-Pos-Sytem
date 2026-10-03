@@ -6,10 +6,11 @@ import { pgClient } from '../../db/index.ts';
 import { ensureSaasControlPlane, ensureTenantStoreUsers } from '../../db/schemaInit.ts';
 import { generateToken, requireAuth } from '../auth.ts';
 import type { AuthenticatedRequest, AuthUser } from '../auth.ts';
+import { extractRequestStoreSubdomain } from '../middleware/tenantMiddleware.ts';
 
 const router = Router();
 
-// Helper to resolve tenant slug from request headers, query, or body (for public login/register/quick-credentials endpoints)
+// Helper to resolve tenant slug strictly from request subdomain, route param, or verified headers
 async function resolveTargetTenant(req: Request): Promise<{
   id: number;
   slug: string;
@@ -25,27 +26,90 @@ async function resolveTargetTenant(req: Request): Promise<{
   owner_phone?: string;
 } | null> {
   await ensureSaasControlPlane();
-  const querySlug = (req.query?.slug || req.query?.tenantSlug || '').toString().trim().toLowerCase();
-  const headerSlug = (req.headers['x-tenant-slug'] as string | undefined)?.trim().toLowerCase();
-  const bodySlug = (req.body?.tenantSlug || req.body?.slug || '').toString().trim().toLowerCase();
-  const targetSlug = querySlug || headerSlug || bodySlug;
+  const subCheck = extractRequestStoreSubdomain(req);
+  if (subCheck.isSpoofed) {
+    throw new Error(
+      `Cross-origin store spoofing blocked: Request origin store "${subCheck.originSubdomain}" does not match target store "${subCheck.claimedSlug}".`
+    );
+  }
+
+  const targetSlug = subCheck.effectiveSlug;
+  const rawTid =
+    req.query?.tenantId ??
+    req.query?.tenant_id ??
+    req.body?.tenantId ??
+    req.body?.tenant_id ??
+    req.headers['x-tenant-id'] ??
+    (req as any).tenantResolution?.tenant?.id;
+  const explicitTenantId = Number(rawTid);
+  const hasExplicitTenantId = Number.isInteger(explicitTenantId) && explicitTenantId > 0;
 
   if (targetSlug && targetSlug !== 'default' && targetSlug !== 'admin' && targetSlug !== 'superadmin') {
     const tRes = await pgClient.query<any>(
-      'SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, owner_name, owner_email, owner_phone FROM tenants WHERE LOWER(slug) = LOWER($1) LIMIT 1',
+      `SELECT t.id, t.slug, t.name, t.status, t.app_key, t.subscription_plan,
+              t.subscription_start_date, t.subscription_end_date, t.subscription_status,
+              u.name AS owner_name, u.email AS owner_email, u.phone AS owner_phone
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT name, email, phone
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
+       WHERE LOWER(t.slug) = LOWER($1)
+       LIMIT 1`,
       [targetSlug]
     );
-    return tRes.rows[0] || null;
+    const found = tRes.rows[0] || null;
+    if (found && hasExplicitTenantId && Number(found.id) !== explicitTenantId) {
+      throw new Error(
+        `Tenant ID mismatch: Supplied tenant_id (${explicitTenantId}) does not match store subdomain "${targetSlug}" (tenant_id ${found.id}).`
+      );
+    }
+    return found;
+  }
+
+  if (hasExplicitTenantId) {
+    const byIdRes = await pgClient.query<any>(
+      `SELECT t.id, t.slug, t.name, t.status, t.app_key, t.subscription_plan,
+              t.subscription_start_date, t.subscription_end_date, t.subscription_status,
+              u.name AS owner_name, u.email AS owner_email, u.phone AS owner_phone
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT name, email, phone
+         FROM users
+         WHERE tenant_id = t.id AND role = 'ADMIN'
+         ORDER BY id ASC
+         LIMIT 1
+       ) u ON true
+       WHERE t.id = $1
+       LIMIT 1`,
+      [explicitTenantId]
+    );
+    return byIdRes.rows[0] || null;
   }
 
   const defRes = await pgClient.query<any>(
-    'SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status, owner_name, owner_email, owner_phone FROM tenants ORDER BY id ASC LIMIT 1'
+    `SELECT t.id, t.slug, t.name, t.status, t.app_key, t.subscription_plan,
+            t.subscription_start_date, t.subscription_end_date, t.subscription_status,
+            u.name AS owner_name, u.email AS owner_email, u.phone AS owner_phone
+     FROM tenants t
+     LEFT JOIN LATERAL (
+       SELECT name, email, phone
+       FROM users
+       WHERE tenant_id = t.id AND role = 'ADMIN'
+       ORDER BY id ASC
+       LIMIT 1
+     ) u ON true
+     ORDER BY t.id ASC
+     LIMIT 1`
   );
   return defRes.rows[0] || null;
 }
 
 // Public Quick Store Login Credentials for active store (returns exact Owner & Cashier credentials for the target store)
-router.get('/store-credentials', async (req: Request, res: Response) => {
+const handleGetStoreCredentials = async (req: Request, res: Response) => {
   try {
     const tenant = await resolveTargetTenant(req);
     if (!tenant) {
@@ -56,11 +120,12 @@ router.get('/store-credentials', async (req: Request, res: Response) => {
       tenantId: tenant.id,
       slug: tenant.slug,
       storeName: tenant.name,
-      ownerName: tenant.owner_name,
       ownerEmail: tenant.owner_email,
       ownerPhone: tenant.owner_phone,
+      createCashier: false,
     });
 
+    res.setHeader('X-Store-Subdomain', tenant.slug);
     return res.json({
       tenant: {
         id: tenant.id,
@@ -77,47 +142,93 @@ router.get('/store-credentials', async (req: Request, res: Response) => {
       cashier: creds.cashier,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to load store credentials: ' + err.message });
+    return res.status(403).json({ error: 'Failed to load store credentials: ' + err.message });
   }
-});
+};
+router.get('/store-credentials', handleGetStoreCredentials);
+router.get('/store/credentials', handleGetStoreCredentials);
+router.get('/store/:slug/credentials', handleGetStoreCredentials);
 
-// Login (Supports Store Admin/Cashier scoped to tenant, plus SuperAdmin login)
-router.post('/login', async (req: Request, res: Response) => {
+/**
+ * Core Store Cashier & Owner Authentication Handler:
+ * - Authenticates cross-origin API login requests strictly using the specific store's subdomain/slug.
+ * - Blocks login spoofing when Origin/Referer subdomain conflicts with claimed store slug.
+ * - Isolates user lookup strictly to `tenant_id = tenant.id` so if Store 1 and Store 2 have identical
+ *   email/password credentials (either deliberately or via attack), Store 2 only ever authenticates Store 2's user.
+ */
+async function handleStoreOrPlatformLogin(req: Request, res: Response, requireStoreSubdomain: boolean) {
   try {
     await ensureSaasControlPlane();
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const headerSlug = (req.headers['x-tenant-slug'] as string | undefined)?.trim().toLowerCase();
-    const bodySlug = (req.body?.tenantSlug || req.body?.slug || '').toString().trim().toLowerCase();
-    const requestedSlug = bodySlug || headerSlug;
+    const subCheck = extractRequestStoreSubdomain(req);
+    if (subCheck.isSpoofed) {
+      return res.status(403).json({
+        error: `Security Alert: Cross-origin login spoofing blocked. Request origin store "${subCheck.originSubdomain}" does not match target store "${subCheck.claimedSlug}".`,
+        code: 'STORE_LOGIN_SPOOFING_BLOCKED',
+      });
+    }
 
-    // 1. Always allow global SUPERADMIN login regardless of active tenant slug or store suspension/expiry
-    const superAdminCheck = await pgClient.query(
-      `SELECT id, tenant_id, name, email, phone, avatar_url, password_hash, role, status
-       FROM users
-       WHERE LOWER(email) = LOWER($1) AND role = 'SUPERADMIN'
-       LIMIT 1`,
-      [email.trim()]
-    );
+    const requestedSlug = subCheck.effectiveSlug;
+    const rawTid =
+      req.query?.tenantId ??
+      req.query?.tenant_id ??
+      req.body?.tenantId ??
+      req.body?.tenant_id ??
+      req.headers['x-tenant-id'] ??
+      (req as any).tenantResolution?.tenant?.id;
+    const explicitTenantId = Number(rawTid);
+    const hasExplicitTenantId = Number.isInteger(explicitTenantId) && explicitTenantId > 0;
 
-    let result;
-    if (superAdminCheck.rows.length > 0) {
-      result = superAdminCheck;
-    } else if (requestedSlug && requestedSlug !== 'admin' && requestedSlug !== 'superadmin') {
-      const tenantRes = await pgClient.query<any>(
-        'SELECT id, slug, name, status, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status FROM tenants WHERE LOWER(slug) = LOWER($1) LIMIT 1',
-        [requestedSlug]
-      );
+    if (
+      requireStoreSubdomain &&
+      (!requestedSlug || requestedSlug === 'admin' || requestedSlug === 'superadmin') &&
+      !hasExplicitTenantId
+    ) {
+      return res.status(400).json({
+        error: 'Store subdomain and tenant_id are required to authenticate a store cashier or owner.',
+        code: 'STORE_SUBDOMAIN_REQUIRED',
+      });
+    }
+
+    let matchedUser: any = null;
+    let resolvedTenantRow: any = null;
+
+    // 1. If a store subdomain/slug or explicit tenant_id is present, strictly authenticate against that store's tenant_id!
+    if ((requestedSlug && requestedSlug !== 'admin' && requestedSlug !== 'superadmin') || hasExplicitTenantId) {
+      const tenantRes =
+        requestedSlug && requestedSlug !== 'admin' && requestedSlug !== 'superadmin'
+          ? await pgClient.query<any>(
+              'SELECT id, slug, name, status, onboarding_completed, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status FROM tenants WHERE LOWER(slug) = LOWER($1) LIMIT 1',
+              [requestedSlug]
+            )
+          : await pgClient.query<any>(
+              'SELECT id, slug, name, status, onboarding_completed, app_key, subscription_plan, subscription_start_date, subscription_end_date, subscription_status FROM tenants WHERE id = $1 LIMIT 1',
+              [explicitTenantId]
+            );
       if (tenantRes.rows.length === 0) {
         return res.status(404).json({
-          error: `The store '${requestedSlug}' does not exist or has been removed.`,
+          error: `The target store does not exist or has been removed.`,
           code: 'TENANT_NOT_FOUND',
         });
       }
+
       const tenant = tenantRes.rows[0];
+      resolvedTenantRow = tenant;
+
+      // Cross-verify supplied tenant_id against the store subdomain's tenant.id to stop spoofing
+      if (hasExplicitTenantId && Number(tenant.id) !== explicitTenantId) {
+        return res.status(403).json({
+          error: `Security Alert: Supplied tenant_id (${explicitTenantId}) does not match store "${tenant.slug}" (tenant_id ${tenant.id}).`,
+          code: 'TENANT_ID_SPOOFING_BLOCKED',
+        });
+      }
+
+      const verifiedTenantId = Number(tenant.id);
+
       const isExpiredByDate =
         tenant.subscription_end_date && new Date(tenant.subscription_end_date).getTime() < Date.now();
       const isMarkedExpired =
@@ -129,7 +240,7 @@ router.post('/login', async (req: Request, res: Response) => {
           await pgClient
             .query(
               `UPDATE tenants SET subscription_status = 'EXPIRED', updated_at = NOW() WHERE id = $1`,
-              [tenant.id]
+              [verifiedTenantId]
             )
             .catch(() => {});
         }
@@ -145,34 +256,71 @@ router.post('/login', async (req: Request, res: Response) => {
         });
       }
 
-      result = await pgClient.query(
+      // Strictly query users belonging ONLY to this specific store (WHERE tenant_id = $2 AND LOWER(email) = LOWER($1))
+      // Even if Store 1 and Store 2 share identical email & password, only Store 2's rows (with tenant_id = verifiedTenantId) are inspected.
+      const storeUsersRes = await pgClient.query(
         `SELECT id, tenant_id, name, email, phone, avatar_url, password_hash, role, status
          FROM users
-         WHERE LOWER(email) = LOWER($1) AND (tenant_id = $2 OR role = 'SUPERADMIN')
-         ORDER BY CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END
-         LIMIT 1`,
-        [email.trim(), tenant.id]
+         WHERE COALESCE(tenant_id, 1) = $2 AND LOWER(email) = LOWER($1)
+         ORDER BY CASE WHEN role = 'ADMIN' THEN 0 ELSE 1 END, id ASC`,
+        [email.trim(), verifiedTenantId]
       );
+
+      for (const candidate of storeUsersRes.rows) {
+        if (Number(candidate.tenant_id) !== verifiedTenantId) continue;
+        const isMatch = await bcrypt.compare(password, candidate.password_hash);
+        if (isMatch) {
+          matchedUser = candidate;
+          break;
+        }
+      }
+
+      // Only if no store user matched in this tenant, check if global SUPERADMIN is logging in
+      if (!matchedUser) {
+        const saRes = await pgClient.query(
+          `SELECT id, tenant_id, name, email, phone, avatar_url, password_hash, role, status
+           FROM users
+           WHERE role = 'SUPERADMIN' AND LOWER(email) = LOWER($1)
+           ORDER BY id ASC
+           LIMIT 1`,
+          [email.trim()]
+        );
+        if (saRes.rows.length > 0) {
+          const saCandidate = saRes.rows[0];
+          if (await bcrypt.compare(password, saCandidate.password_hash)) {
+            matchedUser = saCandidate;
+          }
+        }
+      }
+
+      if (!matchedUser) {
+        return res.status(401).json({
+          error: `Invalid email or password for store "${tenant.name}" (${tenant.slug}).`,
+        });
+      }
     } else {
-      result = await pgClient.query(
+      // 2. Platform / SuperAdmin login (when not on a specific store subdomain)
+      const candidatesRes = await pgClient.query(
         `SELECT id, tenant_id, name, email, phone, avatar_url, password_hash, role, status
          FROM users
          WHERE LOWER(email) = LOWER($1)
-         ORDER BY CASE WHEN role = 'SUPERADMIN' THEN 0 ELSE 1 END, id ASC
-         LIMIT 1`,
+         ORDER BY CASE WHEN role = 'SUPERADMIN' THEN 0 ELSE 1 END, id ASC`,
         [email.trim()]
       );
+
+      for (const candidate of candidatesRes.rows) {
+        if (await bcrypt.compare(password, candidate.password_hash)) {
+          matchedUser = candidate;
+          break;
+        }
+      }
+
+      if (!matchedUser) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
     }
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
-
-    const user: any = result.rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
+    const user: any = matchedUser;
 
     if (user.status === 'PENDING') {
       return res.status(423).json({
@@ -182,21 +330,41 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const parsedTid = Number(user.tenant_id);
-    const tenantId = Number.isInteger(parsedTid) && parsedTid > 0 ? parsedTid : 1;
     const isSuperAdminRole = String(user.role).toUpperCase() === 'SUPERADMIN';
     const isStoreAdminRole = String(user.role).toUpperCase() === 'ADMIN';
-    let tenantSlug = isSuperAdminRole ? 'admin' : requestedSlug || '';
-    let tenantName = isSuperAdminRole ? 'MyPOS SaaS C-Panel' : 'Retail Store';
-    let onboardingCompleted = true;
-    let subscriptionStatus = 'ACTIVE';
+    const tenantId =
+      !isSuperAdminRole && resolvedTenantRow?.id
+        ? Number(resolvedTenantRow.id)
+        : Number.isInteger(parsedTid) && parsedTid > 0
+        ? parsedTid
+        : 1;
+
+    // Extra safeguard: for non-SuperAdmin store login, user.tenant_id MUST equal resolvedTenantRow.id
+    if (!isSuperAdminRole && resolvedTenantRow && Number(user.tenant_id) !== Number(resolvedTenantRow.id)) {
+      return res.status(403).json({
+        error: 'Store authentication mismatch: Credentials do not belong to this store subdomain.',
+        code: 'CROSS_STORE_LOGIN_DENIED',
+      });
+    }
+
+    let tenantSlug = isSuperAdminRole ? 'admin' : resolvedTenantRow?.slug || requestedSlug || '';
+    let tenantName = isSuperAdminRole ? 'POS SaaS C-Panel' : resolvedTenantRow?.name || 'Retail Store';
+    let onboardingCompleted = resolvedTenantRow ? Boolean(resolvedTenantRow.onboarding_completed) : true;
+    let subscriptionStatus = resolvedTenantRow
+      ? String(resolvedTenantRow.subscription_status || 'ACTIVE').toUpperCase()
+      : 'ACTIVE';
 
     if (!isSuperAdminRole) {
-      const tLookup = await pgClient.query<any>(
-        'SELECT id, slug, name, status, onboarding_completed, subscription_end_date, subscription_status FROM tenants WHERE id = $1 LIMIT 1',
-        [tenantId]
-      );
-      if (tLookup.rows.length > 0) {
-        const t = tLookup.rows[0];
+      const t =
+        resolvedTenantRow ||
+        (
+          await pgClient.query<any>(
+            'SELECT id, slug, name, status, onboarding_completed, subscription_end_date, subscription_status FROM tenants WHERE id = $1 LIMIT 1',
+            [tenantId]
+          )
+        ).rows[0];
+
+      if (t) {
         tenantSlug = t.slug;
         tenantName = t.name;
         onboardingCompleted = Boolean(t.onboarding_completed);
@@ -242,6 +410,7 @@ router.post('/login', async (req: Request, res: Response) => {
       id: user.id,
       tenantId,
       slug: tenantSlug,
+      storeSubdomain: tenantSlug,
       tenantName,
       name: user.name,
       email: user.email,
@@ -255,15 +424,32 @@ router.post('/login', async (req: Request, res: Response) => {
     };
 
     const token = generateToken(authUser);
-    res.json({ token, user: authUser });
+    if (tenantSlug) {
+      res.setHeader('X-Store-Subdomain', tenantSlug);
+      res.setHeader('X-Tenant-Slug', tenantSlug);
+    }
+    return res.json({ token, user: authUser });
   } catch (err: any) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Login failed: ' + err.message });
+    return res.status(500).json({ error: 'Login failed: ' + err.message });
   }
-});
+}
 
-// Register
-router.post('/register', async (req: Request, res: Response) => {
+// Dedicated Store Cashier & Owner Auth Routes (strictly bound to specific store subdomain)
+router.post('/store/:slug/login', (req: Request, res: Response) =>
+  handleStoreOrPlatformLogin(req, res, true)
+);
+router.post('/store/login', (req: Request, res: Response) =>
+  handleStoreOrPlatformLogin(req, res, true)
+);
+
+// General Login Route (automatically enforces store subdomain isolation when called from a store)
+router.post('/login', (req: Request, res: Response) =>
+  handleStoreOrPlatformLogin(req, res, false)
+);
+
+// Register (supports /register, /store/register, /store/:slug/register)
+const handleStoreRegister = async (req: Request, res: Response) => {
   try {
     const { name, email, password, phone } = req.body;
     if (!name || !email || !password) {
@@ -308,14 +494,20 @@ router.post('/register', async (req: Request, res: Response) => {
     console.error('Registration error:', err);
     res.status(500).json({ error: 'Registration failed: ' + err.message });
   }
-});
+};
+router.post('/register', handleStoreRegister);
+router.post('/store/register', handleStoreRegister);
+router.post('/store/:slug/register', handleStoreRegister);
 
 // Get current user profile
 router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const userTenantId = Number(req.user!.tenantId) > 0 ? Number(req.user!.tenantId) : 1;
     const userRes = await pgClient.query(
-      'SELECT id, tenant_id, name, email, phone, avatar_url, role, status FROM users WHERE id = $1',
-      [req.user!.id]
+      `SELECT id, tenant_id, name, email, phone, avatar_url, role, status
+       FROM users
+       WHERE id = $1 AND (UPPER(role) = 'SUPERADMIN' OR COALESCE(tenant_id, 1) = $2)`,
+      [req.user!.id, userTenantId]
     );
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
@@ -367,9 +559,13 @@ router.put('/profile', requireAuth, async (req: AuthenticatedRequest, res: Respo
     const trimmedPhone = typeof phone === 'string' ? phone.trim() : '';
     const sanitizedAvatarUrl = typeof avatarUrl === 'string' ? avatarUrl.trim() : (req.user?.avatarUrl || '');
 
+    const userTenantId = Number(req.user!.tenantId) > 0 ? Number(req.user!.tenantId) : 1;
     const result = await pgClient.query(
-      'UPDATE users SET name = $1, phone = $2, avatar_url = $3, updated_at = NOW() WHERE id = $4 RETURNING id, tenant_id, name, email, phone, avatar_url, role, status',
-      [trimmedName, trimmedPhone, sanitizedAvatarUrl, userId]
+      `UPDATE users
+       SET name = $1, phone = $2, avatar_url = $3, updated_at = NOW()
+       WHERE id = $4 AND (UPPER(role) = 'SUPERADMIN' OR COALESCE(tenant_id, 1) = $5)
+       RETURNING id, tenant_id, name, email, phone, avatar_url, role, status`,
+      [trimmedName, trimmedPhone, sanitizedAvatarUrl, userId, userTenantId]
     );
 
     if (result.rows.length === 0) {
@@ -424,9 +620,15 @@ router.put('/change-password', requireAuth, async (req: AuthenticatedRequest, re
       return res.status(400).json({ error: 'New password and confirm password do not match.' });
     }
 
-    const userRes = await pgClient.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    const userTenantId = Number(req.user!.tenantId) > 0 ? Number(req.user!.tenantId) : 1;
+    const userRes = await pgClient.query(
+      `SELECT password_hash, tenant_id, role
+       FROM users
+       WHERE id = $1 AND (UPPER(role) = 'SUPERADMIN' OR COALESCE(tenant_id, 1) = $2)`,
+      [userId, userTenantId]
+    );
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ error: 'User account not found.' });
+      return res.status(404).json({ error: 'User account not found in this store.' });
     }
 
     const user: any = userRes.rows[0];
@@ -436,7 +638,12 @@ router.put('/change-password', requireAuth, async (req: AuthenticatedRequest, re
     }
 
     const newHash = await bcrypt.hash(newPassword, 10);
-    await pgClient.query('UPDATE users SET password_hash = $1, quick_password = $2, updated_at = NOW() WHERE id = $3', [newHash, newPassword, userId]);
+    await pgClient.query(
+      `UPDATE users
+       SET password_hash = $1, quick_password = $2, updated_at = NOW()
+       WHERE id = $3 AND (UPPER(role) = 'SUPERADMIN' OR COALESCE(tenant_id, 1) = $4)`,
+      [newHash, newPassword, userId, userTenantId]
+    );
 
     res.json({ message: 'Password changed successfully. Please remember your new password.' });
   } catch (err: any) {
@@ -445,7 +652,7 @@ router.put('/change-password', requireAuth, async (req: AuthenticatedRequest, re
   }
 });
 
-// Forgot Password
+// Forgot Password (strictly scoped by tenant_id when invoked from a store)
 router.post('/forgot-password', async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
@@ -453,7 +660,16 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email is required.' });
     }
 
-    const userRes = await pgClient.query('SELECT id, name, email, tenant_id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
+    const targetTenant = await resolveTargetTenant(req).catch(() => null);
+    const resolvedTenantId = Number(targetTenant?.id || req.body?.tenantId || req.query?.tenantId || 1);
+
+    const userRes = await pgClient.query(
+      `SELECT id, name, email, tenant_id
+       FROM users
+       WHERE LOWER(email) = LOWER($1) AND COALESCE(tenant_id, 1) = $2
+       LIMIT 1`,
+      [email.trim(), resolvedTenantId]
+    );
     if (userRes.rows.length === 0) {
       return res.json({
         message: 'If the email exists in our system, a password reset verification token has been issued.',
@@ -463,13 +679,16 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     const user: any = userRes.rows[0];
     const resetToken = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-    const userTid = Number(user.tenant_id);
+    const userTid = Number(user.tenant_id) > 0 ? Number(user.tenant_id) : resolvedTenantId;
 
-    await pgClient.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user.id]);
+    await pgClient.query(
+      'DELETE FROM password_reset_tokens WHERE user_id = $1 AND COALESCE(tenant_id, 1) = $2',
+      [user.id, userTid]
+    );
 
     await pgClient.query(
       'INSERT INTO password_reset_tokens (tenant_id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
-      [Number.isInteger(userTid) && userTid > 0 ? userTid : 1, user.id, resetToken, expiresAt]
+      [userTid, user.id, resetToken, expiresAt]
     );
 
     res.json({
@@ -480,7 +699,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
   }
 });
 
-// Reset Password
+// Reset Password (strictly scoped by tenant_id)
 router.post('/reset-password', async (req: Request, res: Response) => {
   try {
     const { token, newPassword } = req.body;
@@ -492,24 +711,41 @@ router.post('/reset-password', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
 
+    const targetTenant = await resolveTargetTenant(req).catch(() => null);
+    const resolvedTenantId = Number(targetTenant?.id || req.body?.tenantId || req.query?.tenantId || 1);
+
     const tokenRes = await pgClient.query(
-      'SELECT user_id, expires_at FROM password_reset_tokens WHERE token = $1',
-      [token]
+      `SELECT user_id, tenant_id, expires_at
+       FROM password_reset_tokens
+       WHERE token = $1 AND COALESCE(tenant_id, 1) = $2
+       LIMIT 1`,
+      [token, resolvedTenantId]
     );
 
     if (tokenRes.rows.length === 0) {
-      return res.status(400).json({ error: 'Invalid or expired password reset token.' });
+      return res.status(400).json({ error: 'Invalid or expired password reset token for this store.' });
     }
 
-    const { user_id, expires_at } = tokenRes.rows[0] as any;
+    const { user_id, tenant_id, expires_at } = tokenRes.rows[0] as any;
+    const effectiveTenantId = Number(tenant_id) > 0 ? Number(tenant_id) : resolvedTenantId;
+
     if (new Date() > new Date(expires_at)) {
-      await pgClient.query('DELETE FROM password_reset_tokens WHERE token = $1', [token]);
+      await pgClient.query(
+        'DELETE FROM password_reset_tokens WHERE token = $1 AND COALESCE(tenant_id, 1) = $2',
+        [token, effectiveTenantId]
+      );
       return res.status(400).json({ error: 'Password reset token has expired. Please request a new one.' });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pgClient.query('UPDATE users SET password_hash = $1, quick_password = $2, updated_at = NOW() WHERE id = $3', [passwordHash, newPassword, user_id]);
-    await pgClient.query('DELETE FROM password_reset_tokens WHERE token = $1', [token]);
+    await pgClient.query(
+      'UPDATE users SET password_hash = $1, quick_password = $2, updated_at = NOW() WHERE id = $3 AND COALESCE(tenant_id, 1) = $4',
+      [passwordHash, newPassword, user_id, effectiveTenantId]
+    );
+    await pgClient.query(
+      'DELETE FROM password_reset_tokens WHERE token = $1 AND COALESCE(tenant_id, 1) = $2',
+      [token, effectiveTenantId]
+    );
 
     res.json({ message: 'Password has been reset successfully. You may now log in with your new password.' });
   } catch (err: any) {

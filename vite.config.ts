@@ -12,7 +12,16 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         injectRegister: null,
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
+        includeAssets: [
+          'favicon.ico',
+          'favicon-32x32.png',
+          'icon.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-192x192.png',
+          'pwa-maskable-512x512.png',
+        ],
         manifest: {
           id: '/',
           name: 'StepSync POS',
@@ -32,21 +41,30 @@ export default defineConfig(() => {
               short_name: 'POS',
               description: 'Open Point of Sale checkout counter',
               url: '/?tab=pos',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192' }],
+              icons: [
+                { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+                { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+              ],
             },
             {
               name: 'Shoe Catalog',
               short_name: 'Catalog',
               description: 'View and manage shoe inventory',
               url: '/?tab=inventory',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192' }],
+              icons: [
+                { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+                { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+              ],
             },
             {
               name: 'Sales Reports',
               short_name: 'Reports',
               description: 'Financial ledger & analytics',
               url: '/?tab=reports',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192' }],
+              icons: [
+                { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+                { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+              ],
             },
           ],
           icons: [
@@ -63,10 +81,22 @@ export default defineConfig(() => {
               purpose: 'any',
             },
             {
+              src: '/pwa-maskable-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+            {
               src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
+            },
+            {
+              src: '/apple-touch-icon.png',
+              sizes: '180x180',
+              type: 'image/png',
+              purpose: 'any',
             },
             {
               src: '/icon.svg',
